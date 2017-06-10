@@ -1,5 +1,5 @@
-# dev-utils
-Utility Scripts for Docker
+# dev-utils (Development Tools/Utilities)
+Utility Scripts for Development 
 
 * [`deploy_sphinx_docs.sh`](https://github.com/JTarball/dev-utils/blob/master/bin/deploy_sphinx_docs.sh) - deploy sphinx html documentation to gh-pages branch (which should be viewable from github pages)
 * [`go_devpi.sh`](https://github.com/JTarball/dev-utils/blob/master/bin/go_devpi.sh) - ssh into AWS host: devpi
