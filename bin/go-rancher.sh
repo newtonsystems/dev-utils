@@ -12,4 +12,4 @@ if [ -z "$AWS_CERT_FOLDER" ]; then
     exit 1
 fi
 
-ssh -i "$AWS_CERT_FOLDER/rancher.pem" ubuntu@ec2-34-226-81-75.compute-1.amazonaws.com
+ssh -i "$AWS_CERT_FOLDER/rancher.pem" ubuntu@ec2-34-203-91-84.compute-1.amazonaws.com
