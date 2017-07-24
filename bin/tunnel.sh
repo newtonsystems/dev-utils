@@ -19,7 +19,7 @@
 #
 # usage: ./tunnel.sh start (spin up EC2 instances)
 #        ./tunnel.sh stop (stops EC2 instances)
-
+RANCHER_INSTANCE_ID="0054cbb4c8b251bd8"
 
 # Start all instances
 start ()
@@ -34,7 +34,7 @@ start ()
 stop ()
 {
 	echo "Stopping instances for us-east-1 ..."
-	instance=$(aws ec2 describe-instances --filters "Name=instance-state-name, Values=running, pending" | grep InstanceId | grep -E -o "i\-[0-9A-Za-z]+")
+	instance=$(aws ec2 describe-instances --filters "Name=instance-state-name, Values=running, pending" | grep InstanceId | grep -E -o "i\-[0-9A-Za-z]+" | grep -v $RANCHER_INSTANCE_ID)
 
 	aws ec2 stop-instances --instance-ids $instance
 }
