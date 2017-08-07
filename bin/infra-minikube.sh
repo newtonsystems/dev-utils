@@ -33,13 +33,41 @@ usage ()
 }
 
 
-
-
 # Start all instances
 create ()
 {
+	check-setup.sh
+	if [ $? -ne 0 ]; then
+		exit 1
+	fi
 	echo -e "$INFO Creating all services locally inside minikube ..."
 	kubectl apply -f $NEWTON_PATH/devops/k8s/deploy/local/
+}
+
+
+clean ()
+{
+	check-setup.sh
+	if [ $? -ne 0 ]; then
+		exit 1
+	fi
+
+	echo -e -n "$RED Will clean up the entire Kubernetes environment "
+	echo -e -n "$RED deleting ALL Kubernetes components (services, pods, config, deployments) ... Are you sure? (y to continue) $NO_COLOR"
+	read -n 1 -r
+	echo    # (optional) move to a new line
+	if [[ $REPLY =~ ^[Yy]$ ]] ; then
+		echo -e "$INFO Deleting all services locally inside minikube ..."
+		kubectl delete deployment --all
+		kubectl delete daemonset --all
+		kubectl delete replicationcontroller --all
+		kubectl delete services --all
+		kubectl delete pods --all
+		kubectl delete configmap --all
+		eval $(minikube docker-env); docker-rm-unnamed-images;
+	else
+		echo -e "$YELLOW Aborting ... $NO_COLOR"
+	fi
 }
 
 
@@ -48,6 +76,7 @@ delete ()
 	echo -e "$INFO Deleting all services locally inside minikube ..."
 	kubectl delete -f $NEWTON_PATH/devops/k8s/deploy/local/
 }
+
 
 ui ()
 {
@@ -65,8 +94,6 @@ ui ()
 	minikube service zipkin
 	echo -e "$WARN Not going to open minikube addon heapster. Heapster not currently working with minikube 0.19 (works with 0.18) (21/5/17)"
 }
-
-
 
 
 # #
@@ -148,16 +175,6 @@ ui ()
 # 	-@eval $$(minikube docker-env); docker-rm-unnamed-images;
 
 
-
-
-
-
-
-
-
-
-
-
 #-------------------------------------------------------
 
 # "main"
@@ -167,6 +184,9 @@ case "$1" in
 		;;
 	--delete)
 		delete
+		;;
+	--clean)
+		clean
 		;;
 	--ui)
 		ui
