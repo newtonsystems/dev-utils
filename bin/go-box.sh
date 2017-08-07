@@ -13,5 +13,6 @@ fi
 echo "ssh rancher@$box"
 ipaddr=$(aws ec2 describe-instances --filters="Name=key-name, Values=$box" | grep PublicIp | grep -E -m 1 -o '[0-9]{1,3}\.[0-9]{1,3}\.[0-9]{1,3}\.[0-9]{1,3}')
 echo "Public IP is $ipaddr"
-echo "MAKE SURE RANCHER.PEM IS IN YOUR SSH KEYS "
+echo "If you get a permission denied you need to add your pem to your ssh keychain: "
+echo -e "\t ssh-add <PEM>"
 ssh ubuntu@$ipaddr
