@@ -29,7 +29,7 @@ fi
 # Usage
 usage ()
 {
-	echo "tunnel.sh (start|stop|help)"
+	echo "infra-minikube.sh (--create|--delete|--ui|--clean)"
 }
 
 
