@@ -2,9 +2,9 @@
 #
 # mkubectl.sh
 #
-# A utility control script for deploying to minikube for development
+# A utility control script for working with minikube for development
 #
-# Make sure you have DEV_UTILS_PATH set
+# Make sure you have DEV_UTILS_PATH, NEWTON_PATH set
 #
 if [ -z $NEWTON_PATH ]; then
     echo "You have not set the environment variable NEWTON_PATH. Please set."
@@ -26,31 +26,117 @@ fi
 
 . $DEV_UTILS_PATH/common/bash-colours.sh
 
+
+CURRENT_BRANCH=`git rev-parse --abbrev-ref HEAD`
+TIMESTAMP=$(date +%s )
+
 # Usage
 usage ()
 {
-	echo "infra-minikube.sh (--create|--delete|--ui|--clean)"
+	echo "mkubectl.sh (
+    --hot-reload-deployment|  Hot-reloaded swap of deployment for <service>
+    --swap-deployment|
+    --compile|
+    --shell
+  )"
 }
 
+# ------------------------------------------------------------------------------
+# Useful CircleCI commands
 
-# Build, push to docker hub (used for circleci)
+# circleci-build-push-to-dockerhub: Builds and pushs docker image for go application
+circleci-build-push-to-dockerhub()
+{
+  if [ -z $DOCKER_USER ]; then
+      echo "You have not set the environment variable DOCKER_USER. Please set."
+      exit
+  fi
 
-# Deploy to kubernetes environment
+  if [ -z $DOCKER_PASS ]; then
+      echo "You have not set the environment variable DOCKER_PASS. Please set."
+      exit
+  fi
 
+  if [ -z $DOCKER_PROJECT_NAME ]; then
+      echo "You have not set the environment variable DOCKER_PROJECT_NAME. Please set."
+      exit
+  fi
 
-# run shell (to debug and print some useful help)
+  if [ -z $CIRCLE_BRANCH ]; then
+      echo "You have not set the environment variable CIRCLE_BRANCH. Please set."
+      exit
+  fi
 
-# Run hot reloaded to minikube
+  echo -e "$INFO Updating & installing dependencies ..."
+  update
+  install
 
-# update / install repo
+  echo -e "$INFO Building go binary ..."
+  # Cannot use volumes in circleci so we cant use 'make build-build'
+  docker build -t $DOCKER_PROJECT_NAME:compile -f Dockerfile.build .
+  docker run --name compiler $DOCKER_PROJECT_NAME:compile
+  docker cp compiler:/go/src/github.com/newtonsystems/agent-mgmt/main $PWD
 
+  echo -e "$INFO Building docker image and then push to dockerhub ..."
+  docker build -t newtonsystems/$DOCKER_PROJECT_NAME:$CIRCLE_BRANCH .
+  docker login -u $DOCKER_USER -p $DOCKER_PASS
+  docker push newtonsystems/$DOCKER_PROJECT_NAME:$CIRCLE_BRANCH
 
+  # Push "latest" tag if in master branch
+  if [ "${CIRCLE_BRANCH}" == "master" ]; then
+      docker tag newtonsystems/$DOCKER_PROJECT_NAME:$CIRCLE_BRANCH newtonsystems/$DOCKER_PROJECT_NAME:latest
+      docker push newtonsystems/$DOCKER_PROJECT_NAME:latest
+  fi
+
+}
+
+# circleci-go-run-tests: Runs go tests & saves report (for use in CircleCI only)
+# You must have a 'check' in your Makefile + the env variable TEST_REPORTS
+circleci-go-run-tests()
+{
+  if [[ ! -f Makefile ]]; then
+      echo "You do NOT have a Makefile in the current working directory."
+      exit 1
+  fi
+
+  if [[ $(grep 'check:' Makefile | wc -l) -eq 0 ]]; then
+      echo -e "$ERROR It looks like you haven't got a 'check' target in your Makefile."
+      echo -e "The 'check' target should run go tests for your current repo."
+      exit 1
+  fi
+
+  if [ -z $TEST_REPORTS ]; then
+      echo "You have not set the environment variable TEST_REPORTS. Please set."
+      exit 1
+  fi
+
+  echo -e "Updating and installing dependencies"
+  update
+  install
+
+  mkdir -p $TEST_REPORTS
+  trap "go-junit-report <${TEST_REPORTS}/go-test.out > ${TEST_REPORTS}/go-test-report.xml" EXIT
+  make check | tee ${TEST_REPORTS}/go-test.out
+}
 
 # ------------------------------------------------------------------------------
-CURRENT_BRANCH=`git rev-parse --abbrev-ref HEAD`
-TIMESTAMP=tmp-$(date +%s )
+# Useful debug/inspection commands
 
-# -- Utils Functions ---
+# shell-debug: Run shell through telepresence (to debug and print some useful help)
+shell-tele() {
+  telepresence --port $1
+}
+
+# shell: Run shell through kubectl
+shell ()
+{
+    kubectl exec $1 -it -- /bin/bash
+}
+
+# ------------------------------------------------------------------------------
+# Dependencies commands for go application
+
+# --- Utils Functions for Dependencies ---
 
 # update-deps-env: Updates glide dependencies
 update-deps-env ()
@@ -106,6 +192,9 @@ install()
       install-deps-env "$CURRENT_BRANCH"
   fi
 }
+
+# ------------------------------------------------------------------------------
+# Logging commands
 
 # Scenarios:
 # If a pod we are tailing get deleted we want to automatically switch to the new pod's log
@@ -174,16 +263,111 @@ update-tail-when-ready() {
   done
 }
 
+# ------------------------------------------------------------------------------
+# Compile commands
+# Used inside docker container to build the executable for the correct platform
 
+#
+# Creates binary
+#
+# $1 - The .go file to compile to an executable
+build-binary()
+{
+   CGO_ENABLED=0 GOOS=linux go build -a -installsuffix cgo -o main $1
+}
 
+#
+# Compiles go application
+#
+# $1 - The .go file to compile to an executable
+compile()
+{
+  update
+  install
+  build-binary $1
+}
 
+# ------------------------------------------------------------------------------
+# Minikube local development
 
-# replace image with: latest-release, latest-branch, custom (e.g. master)
+# --- Utils Functions for local development ---
+
+# Generic swap minikube deployment with image
+# $1 - service name / repo name
+# $2 - k8s deployment filename in $NEWTON_PATH/devops/k8s/deploy/local/ folder
+# $3 - docker image in the normal docker form <reponame>:<tag>
+swap-deployment() {
+  kubectl replace -f $NEWTON_PATH/devops/k8s/deploy/local/$2
+	kubectl set image -f $NEWTON_PATH/devops/k8s/deploy/local/$2 $1=$3
+
+  update-tail-when-ready $1
+}
+
+check_probe_port() {
+  DEBUG_PORT=`kubectl get svc $1 -o jsonpath='{.spec.ports[?(@.name=="debug")].nodePort}'`
+  ((VERBOSE)) && echo -e "$INFO Debug port for $1: $DEBUG_PORT"
+
+  if [[ -z "$DEBUG_PORT" ]]; then
+    echo -e "$WARN No debug port found for service: $1. Will not monitor port."
+    return
+  fi
+
+  while true; do
+    sleep 120
+    nc -z `minikube ip` $DEBUG_PORT  > /dev/null && echo -e "$INFO debug port (Readiness/Live) ${GREEN}Up${NO_COLOUR}" && continue
+    echo -e "$INFO debug port (Readiness/Live) ${RED}Down${NO_COLOUR} "
+  done
+}
+
+check_health_probe() {
+  echo -e "$INFO will check healthz probe periodically ..."
+  DEBUG_PORT=`kubectl get svc $1 -o jsonpath='{.spec.ports[?(@.name=="debug")].nodePort}'`
+  ((VERBOSE)) && echo -e "$INFO Debug port for $1: $DEBUG_PORT"
+
+  if [[ -z "$DEBUG_PORT" ]]; then
+    echo -e "$WARN No debug port found for service: $1. Will not monitor healthz probe."
+    return
+  fi
+
+  while true; do
+    sleep 120
+
+    if [[ "$(curl -s $(minikube ip):$DEBUG_PORT/healthz)" == "ok" ]]; then
+      status="{$GREEN}ok${NO_COLOUR}"
+    else
+      status="{$RED}failed${NO_COLOUR}"
+    fi
+
+    echo -e "$INFO healthz probe $status"
+  done
+}
+
+check_started_probe() {
+  echo -e "$INFO will check started probe periodically ..."
+
+  DEBUG_PORT=`kubectl get svc $1 -o jsonpath='{.spec.ports[?(@.name=="debug")].nodePort}'`
+  ((VERBOSE)) && echo -e "$INFO Debug port for $1: $DEBUG_PORT"
+
+  if [[ -z "$DEBUG_PORT" ]]; then
+    echo -e "$WARN No debug port found for service: $1. Will not monitor started probe."
+    return
+  fi
+
+  while true; do
+    sleep 120
+    started=$(curl -s $(minikube ip):$DEBUG_PORT/started)
+    echo -e "$INFO started: $started"
+  done
+}
+
+# --- End of utils functions ---
+
+# hot-reload-deployment: Replace image with local repo (hot-reloaded) for fast development
 # $1 - REPO
 # $2 - LOCAL_DEPLOYMENT_FILENAME
 # $3 - watch dir/files
 # EXPECT HEALTHZ PROBE ON DEPLOYMENT
-reload-deployment()
+hot-reload-deployment()
 {
   check-setup.sh
   if [ $? -ne 0 ]; then
@@ -209,233 +393,93 @@ reload-deployment()
 
   kubectl replace -f $NEWTON_PATH/devops/k8s/deploy/local/$2
 	kubectl set image -f $NEWTON_PATH/devops/k8s/deploy/local/$2 $1=newtonsystems/$1:kube-dev${TIMESTAMP}
-  #kubectl label pods `kubectl get pods -o wide | grep $REPO | awk '{ print $1 }'` mkube-dev=true
   echo -e "$INFO Waiting till service is ready, attaching logs and then will watch for changes to ${BLUE}$3${NO_COLOUR}"
 
   update-tail-when-ready $1 &
 
-  READINESS_PORT=`kubectl get svc $1 -o jsonpath='{.spec.ports[?(@.name=="debug")].nodePort}'`
-  for i in `seq 1 20`;
-  do
-    nc -z `minikube ip` $READINESS_PORT  > /dev/null && echo -e "$INFO Readiness PROBE: ${GREEN}Success${NO_COLOUR}" && break
-    echo -e "$INFO Readiness probe: ${RED}Unsuccessful${NO_COLOUR} "
-    sleep 30
-  done
-
-  echo -ne "$INFO checking health probe before connecting to logs"
-  while [[ "$(curl -s $(minikube ip):$READINESS_PORT/healthz)" != "ok" ]]; do
-    echo -n .
-    sleep 5
-  done
-  started=$(curl -s $(minikube ip):$READINESS_PORT/started)
-  echo -e ": ${GREEN}Success${NO_COLOUR}   started: $started"
-
+  check_probe_port $1 &
+  check_started_probe $1 &
+  check_health_probe $1 &
 
   echo -e "$INFO Waiting on changes ... "
-  fswatch ~/go/src/github.com/newtonsystems/ping | while read; do
+  fswatch $PWD | while read; do
      echo -e "$INFO Detected a change, killing app to restart $3"
      kubectl exec `kubectl get pods -o wide | grep $1` -- /usr/bin/run.sh --kill-go $3 $4
   done
 }
 
+# swap-deployment-with-latest-release-image: Swap deployment with the latest release.
+# Useful for debugging an issue (as a comparison)
+# $1 - service name  / repo name
+# $2 - k8s deployment filename in $NEWTON_PATH/devops/k8s/deploy/local/ folder
+swap-deployment-with-latest-release-image() {
+  echo -e "$INFO Running the most up-to-date image for branch ${CURRENT_BRANCH}"
+  image="newtonsystems/$1:$(CURRENT_RELEASE_VERSION)"
+  echo -e "$INFO Attempting to use image: $image"
 
+  echo -n "${BLUE}"
+  eval `minikube docker-env`
+  docker pull $image;
+  echo -n "${NO_COLOUR}"
 
-
-# bUILD GO binary
-# build-bin() {}
-#
-# build-command() {
-#   CGO_ENABLED=0 GOOS=linux go build -a -installsuffix cgo -o main ./app/main.go
-# }
-#
-# # build binary
-# #
-#
-# compile (){
-#   update
-#   install
-#   build-command
-# }
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-# Start all instances
-create ()
-{
-	check-setup.sh
-	if [ $? -ne 0 ]; then
-		exit 1
-	fi
-	echo -e "$INFO Creating all services locally inside minikube ..."
-	kubectl apply -f $NEWTON_PATH/devops/k8s/deploy/local/
+  swap-deployment-image $1 $2 $image
 }
 
+# swap-deployment-with-latest-image: Swap deployment with the latest image based on the current branch.
+# Useful for debugging an issue (as a comparison)
+# $1 - service name  / repo name
+# $2 - k8s deployment filename in $NEWTON_PATH/devops/k8s/deploy/local/ folder
+swap-deployment-with-latest-image() {
+  echo -e "$INFO Running the most up-to-date image for branch ${CURRENT_BRANCH}"
+  image="newtonsystems/$1:${CURRENT_BRANCH}"
+  echo -e "$INFO Attempting to use image: $image"
 
-clean ()
-{
-	check-setup.sh
-	if [ $? -ne 0 ]; then
-		exit 1
-	fi
+  eval `minikube docker-env`
+  docker pull $image
+  if [[ $? -ne 0 ]] ; then
+    echo -e "$WARN Failed to find image in registry: $image"; \
+    read -r -p "${GREEN} Specific your own image name or Ctrl+C to exit:${NO_COLOUR}   " reply; \
 
-	echo -e -n "$RED Will clean up the entire Kubernetes environment "
-	echo -e -n "$RED deleting ALL Kubernetes components (services, pods, config, deployments) ... Are you sure? (y to continue) $NO_COLOR"
-	read -n 1 -r
-	echo    # (optional) move to a new line
-	if [[ $REPLY =~ ^[Yy]$ ]] ; then
-		echo -e "$INFO Deleting all services locally inside minikube ..."
-    for namespace in `kubectl get namespaces -o jsonpath='{range .items[*]}{.metadata.name} {end}'`
-    do
-      if [[ "$namespace" == "kube-system" || "$namespace" == "kube-public" ]];  then
-        echo -e "$INFO Skipping deletion of namespace: $BLUE $namespace $NO_COLOUR"
-      fi
-      echo -e "$INFO Deleting components for namespace: $BLUE $namespace $NO_COLOUR"
-  		kubectl delete deployment --all --namespace=$namespace
-  		kubectl delete daemonset --all --namespace=$namespace
-  		kubectl delete replicationcontroller --all --namespace=$namespace
-  		kubectl delete services --all --namespace=$namespace
-  		kubectl delete pods --all --namespace=$namespace
-  		kubectl delete configmap --all --namespace=$namespace
-  		kubectl delete statefulset --all --namespace=$namespace
-  		kubectl delete jobs --all --namespace=$namespace
-    done
-		eval $(minikube docker-env); docker-rm-unnamed-images;
-	else
-		echo -e "$YELLOW Aborting ... $NO_COLOR"
-	fi
+    image="newtonsystems/$(REPO):$reply;"
+    docker pull $image;
+
+    if [[ $? -ne 0 ]]; then
+      echo -e "$ERROR failed to pull $image"
+      exit 1
+    fi
+  fi
+
+  swap-deployment-image $1 $2 $image
 }
 
-
-delete ()
-{
-	echo -e "$INFO Deleting all services locally inside minikube ..."
-	kubectl delete -f $NEWTON_PATH/devops/k8s/deploy/local/
+# swap-deployment-with-custom-image: Swap deployment with the latest release.
+# Useful for debugging an issue
+# $1 - service name  / repo name
+# $2 - k8s deployment filename in $NEWTON_PATH/devops/k8s/deploy/local/ folder
+# $3 - docker image in the normal docker form <reponame>:<tag>
+swap-deployment-with-custom-image() {
+  swap-deployment-image $1 $2 $3
 }
 
-
-ui ()
-{
-	check-setup.sh
-	if [ $? -ne 0 ]; then
-		exit 1
-	fi
-	echo -e "$INFO Opening minikube dashboard (Kubernetes dashboard) ..."
-	minikube dashboard
-	echo -e "$INFO Opening linkerd 's admin page ..."
-	minikube service linkerd --url | tail -n1 | xargs open
-	echo -e "$INFO Opening namerd 's admin page ..."
-	minikube service namerd --url | tail -n1 | xargs open
-	echo -e "$INFO Opening linkerd viz ..."
-	open http://`minikube ip`:`kubectl get svc linkerd-viz -o jsonpath='{.spec.ports[?(@.name=="grafana")].nodePort}'`
-	echo -e "$INFO Opening zipkin (distributed tracing)"
-	minikube service zipkin
-	echo -e "$WARN Not going to open minikube addon heapster. Heapster not currently working with minikube 0.19 (works with 0.18) (21/5/17)"
-}
-
-
-# #
-# # Infrastructure
-# #
-# .PHONY: infra-recreate infra-create infra-delete
-
-# ADMIN_PORT=`kubectl get svc linkerd -o jsonpath='{.spec.ports[?(@.name=="admin")].nodePort}'`
-# NAMERD_PORT=`kubectl get svc namerd -o jsonpath='{.spec.ports[?(@.name=="http")].nodePort}'`
-# PING_ADMIN=http://`minikube ip`:$(ADMIN_PORT)/admin/ping
-# LINKERVIZ_PORT=`kubectl get svc linkerd-viz -o jsonpath='{.spec.ports[?(@.name=="grafana")].nodePort}'`
-# NAMERCTL_BASE_URL = http://`minikube ip`:$(NAMERD_PORT)
-
-
-# infra-set-environment:
-# 	@echo "Set up namerd env NAMERCTL_BASE_URL so you can use namerctl"
-# 	set NAMERCTL_BASE_URL="FSS"
-# 	@echo export NAMERCTL_BASE_URL=$(NAMERCTL_BASE_URL)
-
-
-# infra-recreate:              ##@infrastructure Recreates all critical infrastructure components to run with your service (via minikube/k8s)
-# 	@echo "$(INFO) Re-creating Infrastructure Components"
-# 	make infra-delete
-# 	make infra-create
-
-# infra-create:                ##@infrastructure Creates all critical infrastructure components (via minikube/k8s)
-# 	@echo "$(INFO) Creating Infrastructure Components"
-# 	kubectl apply -f ../devops/k8s/deploy/local/
-
-# infra-delete:                ##@infrastructure Deletes all critical instructure components (via minikube/k8s)
-# 	@echo "$(INFO) Deleting Infrastructure Components"
-# 	kubectl delete -f ../devops/k8s/deploy/local/
-
-# #
-# # Infrastructure helper commands
-# #
-# .PHONY: infra-ui infra-linkerd-ping infra-linkerd-logs
-
-# infra-ui:                    ##@infrastructure-helper-commands Open all infrastructure's UIs. Perfect for monitoring, debugging and tracing microservices.
-# 	@echo "$(INFO) Opening minikube dashboard (Kubernetes dashboard)"
-# 	@minikube dashboard
-# 	@echo "$(INFO) Opening linkerd 's admin page ..."
-# 	@minikube service linkerd --url | tail -n1 | xargs open
-# 	@echo "$(INFO) Opening linkerd viz ..."
-# 	@open http://`minikube ip`:$(LINKERVIZ_PORT)
-# 	@echo "$(INFO) Opening zipkin (distributed tracing)"
-# 	@minikube service zipkin
-# 	@echo "$(WARN) Not going to open minikube addon heapster. Heapster not currently working with minikube 0.19 (works with 0.18) (21/5/17)"
-# # @echo "$(INFO) Opening Heapster - Resource Usage Analysis and Monitoring"
-# # @open `minikube service monitoring-grafana --namespace=kube-system  --url`
-
-# infra-linkerd-ping:          ##@infrastructure-helper-commands Pings linkerd's admin. A useful way to see if linkerd is up and running.
-# 	@printf "$(GREEN) Pinging Linkerd Admin Interface ... $(RESET)"
-# 	@if [ '$(shell curl $(PING_ADMIN))' != 'pong' ]; then \
-# 		echo "$(RED)Failed to receive a "'pong'" response. It looks like linkerd is not running...$(RESET)"; \
-# 		exit 1; \
-# 	else \
-# 		echo "$(GREEN)Successful ping.$(RESET)"; \
-# 	fi
-
-# infra-linkerd-logs:     ##@infra-linkerd-logs Tails linkerd logs
-# 	@echo "$(INFO) Attaching to service $(BLUE)$(LINKERD_POD_NAME)$(RESET) logs"
-# 	kubectl logs -f --tail=50 $(LINKERD_POD_NAME) linkerd
-
-# infra-namerd-logs:     ##@infra-namerd-logs Tails namerd logs
-# 	@echo "$(INFO) Attaching to service $(BLUE)$(NAMERD_POD_NAME)$(RESET) logs"
-# 	kubectl logs -f --tail=50 $(NAMERD_POD_NAME) namerd
-
-
-# .PHONY: kube-clean
-
-# kube-clean:                       ##@cleanup Cleans Up Kubernetes Environment. Deletes all kubernetes components (services, pods, config, deployments ... etc)
-# 	kubectl delete deployment --all
-# 	kubectl delete daemonset --all
-# 	kubectl delete replicationcontroller --all
-# 	kubectl delete services --all
-# 	kubectl delete pods --all
-# 	kubectl delete configmap --all
-# 	-@eval $$(minikube docker-env); docker-rm-unnamed-images;
-
+# ------------------------------------------------------------------------------
 trap "trap - SIGTERM && kill -- -$$" SIGINT SIGTERM EXIT
-#-------------------------------------------------------
+#-------------------------------------------------------------------------------
+
 while getopts ":hv" opt; do
   case $opt in
-    #h) usage; exit;;
+    h) usage; exit;;
     v) VERBOSE=1;;
-    #\?) usage; exit 1;;
   esac
 done
 
 # "main"
 case "$1" in
+  --circleci-build-push-to-dockerhub)
+		circleci-build-push-to-dockerhub
+		;;
+  --circleci-go-run-tests)
+		circleci-go-run-tests
+		;;
 	--update-deps)
 		update
 		;;
@@ -446,24 +490,30 @@ case "$1" in
     update
   	install
   	;;
-  --update-tail-when-ready)
+  --tail-log)
     update-tail-when-ready $2
   	;;
-    --hot-reload-deployment)
-      reload-deployment ping ping-deployment.yml server.go 50000
-    	;;
-  --swap-deployment)
-    swap-deployment
+  --shell)
+    shell-debug $2
   	;;
-	--delete)
-		delete
-		;;
-	--clean)
-		clean
-		;;
-	--ui)
-		ui
-		;;
+  --shell-tele)
+    shell-tele
+  	;;
+  --compile)
+    compile
+  	;;
+  --hot-reload-deployment)
+    hot-reload-deployment ping ping-deployment.yml server.go 50000
+  	;;
+  --swap-deployment-with-latest-release-image)
+    swap-deployment-with-latest-release-image $2 $3
+  	;;
+  --swap-deployment-with-latest-image)
+    swap-deployment-with-latest-image $2 $3
+  	;;
+  --swap-deployment-with-custom-image)
+    swap-deployment-with-custom-image $2 $3 $4
+  	;;
 	help|*)
 		usage
 		;;
