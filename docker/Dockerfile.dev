@@ -1,0 +1,44 @@
+#
+# Main Dockerfile for Developing Code
+#
+# Should create small images < 30MB :)
+#
+FROM golang:1.9.2-alpine3.6
+LABEL maintainer "james.tarball@newtonsystems.co.uk"
+
+#ENV REPO_DIR /go/src/github.com/newtonsystems/ping
+
+# Build Argument:
+# GO_MAIN - Set the go file to run
+# GO_PORT - The port the go server uses (to make sure it is removed)
+ARG REPO_DIR=/go/src/github.com/newtonsystems/repo-unknown
+ARG GO_MAIN=app/main.go
+ARG GO_PORT=50000
+
+WORKDIR $REPO_DIR
+
+RUN apk add --update --virtual .build-deps \
+        swatch \
+        bash \
+        curl \
+        ncurses \
+        build-base \
+        git \
+        musl-dev \
+        linux-headers \
+        make \
+        gcc \
+        g++ \
+        autoconf \
+        automake \
+        libtool \
+        inotify-tools \
+    && rm -rf /var/cache/apk/*
+
+ENV GOPATH /go
+ENV PATH $GOPATH/bin:$PATH
+
+COPY ./run.sh /usr/bin/run.sh
+RUN chmod +x /usr/bin/run.sh
+
+ENTRYPOINT ["/usr/bin/run.sh", "--hot-reload", "/go/src/github.com/newtonsystems/ping/server.go", "50000"]

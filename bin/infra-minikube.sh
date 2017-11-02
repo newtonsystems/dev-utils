@@ -4,7 +4,7 @@
 #
 # Checks that your local development system is setup correctly
 #
-# Make sure you have DEV_UTILS_PATH set 
+# Make sure you have DEV_UTILS_PATH set
 #
 if [ -z $NEWTON_PATH ]; then
     echo "You have not set the environment variable NEWTON_PATH. Please set."
@@ -58,12 +58,21 @@ clean ()
 	echo    # (optional) move to a new line
 	if [[ $REPLY =~ ^[Yy]$ ]] ; then
 		echo -e "$INFO Deleting all services locally inside minikube ..."
-		kubectl delete deployment --all
-		kubectl delete daemonset --all
-		kubectl delete replicationcontroller --all
-		kubectl delete services --all
-		kubectl delete pods --all
-		kubectl delete configmap --all
+    for namespace in `kubectl get namespaces -o jsonpath='{range .items[*]}{.metadata.name} {end}'`
+    do
+      if [[ "$namespace" == "kube-system" || "$namespace" == "kube-public" ]];  then
+        echo -e "$INFO Skipping deletion of namespace: $BLUE $namespace $NO_COLOUR"
+      fi
+      echo -e "$INFO Deleting components for namespace: $BLUE $namespace $NO_COLOUR"
+  		kubectl delete deployment --all --namespace=$namespace
+  		kubectl delete daemonset --all --namespace=$namespace
+  		kubectl delete replicationcontroller --all --namespace=$namespace
+  		kubectl delete services --all --namespace=$namespace
+  		kubectl delete pods --all --namespace=$namespace
+  		kubectl delete configmap --all --namespace=$namespace
+  		kubectl delete statefulset --all --namespace=$namespace
+  		kubectl delete jobs --all --namespace=$namespace
+    done
 		eval $(minikube docker-env); docker-rm-unnamed-images;
 	else
 		echo -e "$YELLOW Aborting ... $NO_COLOR"
@@ -88,6 +97,8 @@ ui ()
 	minikube dashboard
 	echo -e "$INFO Opening linkerd 's admin page ..."
 	minikube service linkerd --url | tail -n1 | xargs open
+	echo -e "$INFO Opening namerd 's admin page ..."
+	minikube service namerd --url | tail -n1 | xargs open
 	echo -e "$INFO Opening linkerd viz ..."
 	open http://`minikube ip`:`kubectl get svc linkerd-viz -o jsonpath='{.spec.ports[?(@.name=="grafana")].nodePort}'`
 	echo -e "$INFO Opening zipkin (distributed tracing)"
