@@ -25,7 +25,9 @@ kill-go ()
 }
 
 run-go () {
-  echo -e "$INFO Running go app $1 ..."
+  echo -e "$INFO Building and running go executable for $1 ..."
+  go build -i
+
   go run -v $1
 }
 
