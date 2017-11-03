@@ -15,10 +15,13 @@ WARN="$YELLOW[WARN]  `basename "$0"`:$NO_COLOUR"
 # $2 port
 kill-go ()
 {
-  found=$(ps aux |grep "go run $1" | grep -v grep )
-  echo -e "$INFO Process found: $found"
-  kill `ps aux |grep "go run $1" | grep -v grep | awk '{print $2}'` || true
-  lsof -ti:$2 | xargs kill
+  process=$(ps aux |grep "go run .*$1" | grep -v grep )
+  pid_app=$(echo $process | awk '{print $1}')
+  pid_port=$(echo $2 | awk '{print $1}')
+
+  echo -e "$INFO Process found: $process  pid ($pid_app)"
+  kill $pid_app || true
+  lsof -ti:$pid_port || xargs kill
 }
 
 run-go () {

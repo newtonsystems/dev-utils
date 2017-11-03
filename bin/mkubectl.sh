@@ -130,7 +130,12 @@ shell-tele() {
 # shell: Run shell through kubectl
 shell ()
 {
-    kubectl exec $1 -it -- /bin/bash
+  running_pods=$(kubectl get pods -o go-template='{{range $items := .items}}{{if eq .status.phase "Running"}}{{range .spec.containers}}{{if eq .name "'$1'"}}{{$items.metadata.name}} {{end}}{{end}}{{end}}{{end}}')
+  pod_count=$(echo $running_pods | wc -w | xargs)
+  if [[ $pod_count -eq 1 ]]; then
+    kubectl exec $running_pods -it -- run.sh --kill-go ./server.go 50000
+  fi
+
 }
 
 # ------------------------------------------------------------------------------
@@ -206,11 +211,14 @@ install()
 # $1 - REPO_NAME/SERVICE_NAME
 update-tail-when-ready() {
   if [[ -z $1 ]]; then
-      echo -e "$ERROR Failed to set service/repo name"
+      echo -e "$ERROR Failed to set service/repo name. Will not tail log."
+      echo -e "$INFO Attach logs: ${RED}off${NO_COLOUR}"
       return
   fi
+  echo -e "$INFO Attach logs: ${GREEN}on${NO_COLOUR}"
+
   while true; do
-    sleep 30
+    sleep 60
     TAIL_PS=`ps aux |grep "kubectl logs -f $1" | grep -v grep | awk '{print $2}'`
     POD_NAME=`ps aux |grep "kubectl logs -f $1" | grep -v grep | sed -n -e 's/^.*\('$1'\)/\1/p'`
 
@@ -273,7 +281,8 @@ update-tail-when-ready() {
 # $1 - The .go file to compile to an executable
 build-binary()
 {
-   CGO_ENABLED=0 GOOS=linux go build -a -installsuffix cgo -o main $1
+  echo -e "$INFO Compiling $1 to create executable ${BLUE}./main${NO_COLOUR} "
+  CGO_ENABLED=0 GOOS=linux go build -a -installsuffix cgo -o main $1
 }
 
 #
@@ -309,55 +318,77 @@ check_probe_port() {
 
   if [[ -z "$DEBUG_PORT" ]]; then
     echo -e "$WARN No debug port found for service: $1. Will not monitor port."
+    echo -e "$INFO Debug port check: ${RED}off${NO_COLOUR}"
     return
   fi
+  echo -e "$INFO Debug port check: ${GREEN}on${NO_COLOUR}"
 
   while true; do
     sleep 120
-    nc -z `minikube ip` $DEBUG_PORT  > /dev/null && echo -e "$INFO debug port (Readiness/Live) ${GREEN}Up${NO_COLOUR}" && continue
-    echo -e "$INFO debug port (Readiness/Live) ${RED}Down${NO_COLOUR} "
+    nc -z `minikube ip` $DEBUG_PORT  > /dev/null 2>&1 && echo -e "$INFO debug port (Readiness/Live) ${GREEN}up${NO_COLOUR}" && continue
+    echo -e "$INFO Debug port ($DEBUG_PORT) (Readiness/Live) ${RED}down${NO_COLOUR} "
   done
 }
 
 check_health_probe() {
-  echo -e "$INFO will check healthz probe periodically ..."
   DEBUG_PORT=`kubectl get svc $1 -o jsonpath='{.spec.ports[?(@.name=="debug")].nodePort}'`
   ((VERBOSE)) && echo -e "$INFO Debug port for $1: $DEBUG_PORT"
 
   if [[ -z "$DEBUG_PORT" ]]; then
     echo -e "$WARN No debug port found for service: $1. Will not monitor healthz probe."
+    echo -e "$INFO Healthz probe check: ${RED}off${NO_COLOUR}"
     return
   fi
+  echo -e "$INFO Healthz probe check: ${GREEN}on${NO_COLOUR}"
 
   while true; do
     sleep 120
 
     if [[ "$(curl -s $(minikube ip):$DEBUG_PORT/healthz)" == "ok" ]]; then
-      status="{$GREEN}ok${NO_COLOUR}"
+      status="${GREEN}ok${NO_COLOUR}"
     else
-      status="{$RED}failed${NO_COLOUR}"
+      status="${RED}fail${NO_COLOUR}"
     fi
 
-    echo -e "$INFO healthz probe $status"
+    echo -e "$INFO Probe healthz $status"
   done
 }
 
 check_started_probe() {
-  echo -e "$INFO will check started probe periodically ..."
-
   DEBUG_PORT=`kubectl get svc $1 -o jsonpath='{.spec.ports[?(@.name=="debug")].nodePort}'`
   ((VERBOSE)) && echo -e "$INFO Debug port for $1: $DEBUG_PORT"
 
   if [[ -z "$DEBUG_PORT" ]]; then
     echo -e "$WARN No debug port found for service: $1. Will not monitor started probe."
+    echo -e "$INFO Started probe check: ${RED}off${NO_COLOUR}"
     return
   fi
+  echo -e "$INFO Started probe check: ${GREEN}on${NO_COLOUR}"
 
   while true; do
     sleep 120
     started=$(curl -s $(minikube ip):$DEBUG_PORT/started)
-    echo -e "$INFO started: $started"
+    if [[ -z "$started" ]]; then
+      started="${RED}fail${NO_COLOUR}"
+    else
+      started="${BLUE}$started${NO_COLOUR}"
+    fi
+    echo -e "$INFO Probe started $started"
   done
+}
+
+kill-app ()
+{
+  running_pods=$(kubectl get pods -o go-template='{{range $items := .items}}{{if eq .status.phase "Running"}}{{range .spec.containers}}{{if eq .name "'$1'"}}{{$items.metadata.name}} {{end}}{{end}}{{end}}{{end}}')
+  pod_count=$(echo $running_pods | wc -w | xargs)
+  if [[ $pod_count -eq 1 ]]; then
+    kubectl exec $running_pods -it -- run.sh --kill-go ./server.go 50000
+  elif [[ $pod_count -eq 0 ]]; then
+    echo -e "$ERROR No pods found - therefore cant kill app ..."
+  else
+    echo -e "$ERROR Multiple pods found - not sure what action to take, bailing ..."
+  fi
+
 }
 
 # --- End of utils functions ---
@@ -380,20 +411,32 @@ hot-reload-deployment()
       return
   fi
 
-  echo -e "$INFO Updating and installing dependencies in case anything has changed ..."
-  update
+
+  action="${BLUE}Installing${NO_COLOUR}"
+  ((UPDATE)) && action="${BLUE}Updating${NO_COLOUR} and ${BLUE}installing${NO_COLOUR}"
+  echo -e "$INFO $action dependencies ..."
+  ((UPDATE)) && update
   install
 
   eval `minikube docker-env`
   echo -e "$INFO Entering ${BLUE}$NEWTON_PATH/dev-utils/docker${NO_COLOUR} to build dev docker image ..."
   pushd $NEWTON_PATH/dev-utils/docker > /dev/null
-  echo -e "Running command: ${BLUE}docker image build -t newtonsystems/$1:kube-dev${TIMESTAMP} --build-arg GO_MAIN=$3 --build-arg GO_PORT=$4 --build-arg REPO_DIR=/go/src/github.com/newtonsystems/ping -f Dockerfile.dev .${NO_COLOUR}"
-  docker image build -t newtonsystems/$1:kube-dev${TIMESTAMP} --build-arg GO_MAIN=$3 --build-arg GO_PORT=$4 -f Dockerfile.dev .
+
+  docker image build -t newtonsystems/$1:kube-dev \
+    --build-arg GO_MAIN=$3 \
+    --build-arg GO_PORT=$4 \
+    --build-arg REPO_DIR=/go/src/github.com/newtonsystems/$1 \
+    -f Dockerfile.dev .
+
+  if [[ $? -ne 0 ]] ; then
+    echo -e "$ERROR Failed to build docker image."
+    exit 1
+  fi
+
   popd > /dev/null
 
-  kubectl replace -f $NEWTON_PATH/devops/k8s/deploy/local/$2
-	kubectl set image -f $NEWTON_PATH/devops/k8s/deploy/local/$2 $1=newtonsystems/$1:kube-dev${TIMESTAMP}
-  echo -e "$INFO Waiting till service is ready, attaching logs and then will watch for changes to ${BLUE}$3${NO_COLOUR}"
+  kubectl replace --force -f $NEWTON_PATH/devops/k8s/deploy/local/$2
+	kubectl set image -f $NEWTON_PATH/devops/k8s/deploy/local/$2 $1=newtonsystems/$1:kube-dev
 
   update-tail-when-ready $1 &
 
@@ -401,10 +444,10 @@ hot-reload-deployment()
   check_started_probe $1 &
   check_health_probe $1 &
 
-  echo -e "$INFO Waiting on changes ... "
+  echo -e "$INFO Watching for changes to ${BLUE}$PWD${NO_COLOUR} ... "
   fswatch $PWD | while read; do
-     echo -e "$INFO Detected a change, killing app to restart $3"
-     kubectl exec `kubectl get pods -o wide | grep $1` -- /usr/bin/run.sh --kill-go $3 $4
+     echo -e "$INFO Detected a change, killing app to restart $3 on port $4"
+     kill-app $1
   done
 }
 
@@ -465,10 +508,11 @@ swap-deployment-with-custom-image() {
 trap "trap - SIGTERM && kill -- -$$" SIGINT SIGTERM EXIT
 #-------------------------------------------------------------------------------
 
-while getopts ":hv" opt; do
+while getopts ":vu" opt; do
   case $opt in
-    h) usage; exit;;
+    #h) usage; exit;;
     v) VERBOSE=1;;
+    u) UPDATE=1;;
   esac
 done
 
@@ -494,7 +538,7 @@ case "$1" in
     update-tail-when-ready $2
   	;;
   --shell)
-    shell-debug $2
+    shell $2
   	;;
   --shell-tele)
     shell-tele
@@ -503,7 +547,7 @@ case "$1" in
     compile
   	;;
   --hot-reload-deployment)
-    hot-reload-deployment ping ping-deployment.yml server.go 50000
+    hot-reload-deployment ping ping-deployment.yml ./server.go 50000
   	;;
   --swap-deployment-with-latest-release-image)
     swap-deployment-with-latest-release-image $2 $3
