@@ -321,9 +321,9 @@ compile-inside-docker()
 	docker run --name compiler ${REPO}:compile
   # Copy executable from docker container
   # NOTE: Cant use volumes in circleci
-  #docker cp compiler:${NEWTON_PATH}/${REPO}/${REPO} $PWD
-  #docker rm compiler
-  #docker rmi ${REPO}:compile
+  docker cp compiler:/go/src/github.com/newtonsystems/${REPO}/${REPO} $PWD
+  docker rm compiler
+  docker rmi ${REPO}:compile
 
   echo -e "$INFO Removing Dockerfile.build"
   rm Dockerfile.build
@@ -543,7 +543,7 @@ swap-deployment-with-custom-image() {
 }
 
 # ------------------------------------------------------------------------------
-trap "trap - SIGTERM && kill -- -$$" SIGINT SIGTERM EXIT
+trap "trap - SIGTERM && kill -- -$$" SIGINT SIGTERM
 #-------------------------------------------------------------------------------
 
 while getopts ":vu" opt; do
