@@ -43,4 +43,4 @@ RUN chmod +x /usr/bin/run.sh
 
 RUN echo $PWD
 
-ENTRYPOINT ["/usr/bin/run.sh", "--hot-reload", "./server.go", "50000"]
+ENTRYPOINT ["/usr/bin/run.sh", "--hot-reload-bin", "ping"]

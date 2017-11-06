@@ -28,7 +28,7 @@ fi
 
 
 CURRENT_BRANCH=`git rev-parse --abbrev-ref HEAD`
-TIMESTAMP=$(date +%s )
+TIMESTAMP=$(date +%s)
 
 # Usage
 usage ()
@@ -133,7 +133,7 @@ shell ()
   running_pods=$(kubectl get pods -o go-template='{{range $items := .items}}{{if eq .status.phase "Running"}}{{range .spec.containers}}{{if eq .name "'$1'"}}{{$items.metadata.name}} {{end}}{{end}}{{end}}{{end}}')
   pod_count=$(echo $running_pods | wc -w | xargs)
   if [[ $pod_count -eq 1 ]]; then
-    kubectl exec $running_pods -it -- run.sh --kill-go ./server.go 50000
+    kubectl exec $running_pods -it -- /bin/bash
   fi
 
 }
@@ -218,7 +218,7 @@ update-tail-when-ready() {
   echo -e "$INFO Attach logs: ${GREEN}on${NO_COLOUR}"
 
   while true; do
-    sleep 60
+    sleep 30
     TAIL_PS=`ps aux |grep "kubectl logs -f $1" | grep -v grep | awk '{print $2}'`
     POD_NAME=`ps aux |grep "kubectl logs -f $1" | grep -v grep | sed -n -e 's/^.*\('$1'\)/\1/p'`
 
@@ -274,16 +274,21 @@ update-tail-when-ready() {
 # ------------------------------------------------------------------------------
 # Compile commands
 # Used inside docker container to build the executable for the correct platform
+build-binary()
+{
+  echo -e "$INFO Compiling binary ..."
+  env CGO_ENABLED=0 GOOS=linux GOARCH=amd64 go build -i -v
+}
 
 #
 # Creates binary
 #
 # $1 - The .go file to compile to an executable
-build-binary()
-{
-  echo -e "$INFO Compiling $1 to create executable ${BLUE}./main${NO_COLOUR} "
-  CGO_ENABLED=0 GOOS=linux go build -a -installsuffix cgo -o main $1
-}
+# build-binary()
+# {
+#   echo -e "$INFO Compiling $1 to create executable ${BLUE}./main${NO_COLOUR} "
+#   CGO_ENABLED=0 GOOS=linux go build -i -v cgo -o main $1
+# }
 
 #
 # Compiles go application
@@ -293,8 +298,37 @@ compile()
 {
   update
   install
-  build-binary $1
+  build-binary
 }
+
+#
+# Compiles go binary for alpine
+#
+compile-inside-docker()
+{
+  REPO=$1
+
+  if [ -z "$REPO" ]; then
+    echo -e "$ERROR Please set the REPO. mkubectl.sh --compile-inside-docker <REPO>"
+    exit 1
+  fi
+
+  echo -e "$INFO Temporarily copying Dockerfile.build to current dir ..."
+  cp $NEWTON_PATH/dev-utils/docker/Dockerfile.build .
+
+  echo -e  "$INFO Building a linux-alpine Go binary locally with a docker container ${BLUE}${REPO}:compile${RESET}"
+  docker build -t ${REPO}:compile --build-arg REPO=$REPO -f Dockerfile.build .
+	docker run --name compiler ${REPO}:compile
+  # Copy executable from docker container
+  # NOTE: Cant use volumes in circleci
+  #docker cp compiler:${NEWTON_PATH}/${REPO}/${REPO} $PWD
+  #docker rm compiler
+  #docker rmi ${REPO}:compile
+
+  echo -e "$INFO Removing Dockerfile.build"
+  rm Dockerfile.build
+}
+
 
 # ------------------------------------------------------------------------------
 # Minikube local development
@@ -382,13 +416,12 @@ kill-app ()
   running_pods=$(kubectl get pods -o go-template='{{range $items := .items}}{{if eq .status.phase "Running"}}{{range .spec.containers}}{{if eq .name "'$1'"}}{{$items.metadata.name}} {{end}}{{end}}{{end}}{{end}}')
   pod_count=$(echo $running_pods | wc -w | xargs)
   if [[ $pod_count -eq 1 ]]; then
-    kubectl exec $running_pods -it -- run.sh --kill-go ./server.go 50000
+    kubectl exec $running_pods -it -- run.sh --kill-bin $1 $2
   elif [[ $pod_count -eq 0 ]]; then
     echo -e "$ERROR No pods found - therefore cant kill app ..."
   else
     echo -e "$ERROR Multiple pods found - not sure what action to take, bailing ..."
   fi
-
 }
 
 # --- End of utils functions ---
@@ -406,7 +439,7 @@ hot-reload-deployment()
     return
   fi
 
-  if [[ ! -f $3 ]]; then
+  if [[ ! -f $NEWTON_PATH/devops/k8s/deploy/local/$2 ]]; then
       echo -e "$ERROR File '$1' not found in current working directory!"
       return
   fi
@@ -417,14 +450,16 @@ hot-reload-deployment()
   echo -e "$INFO $action dependencies ..."
   ((UPDATE)) && update
   install
+  echo -e "$INFO Building binary for go application ..."
+  build-binary
 
   eval `minikube docker-env`
   echo -e "$INFO Entering ${BLUE}$NEWTON_PATH/dev-utils/docker${NO_COLOUR} to build dev docker image ..."
   pushd $NEWTON_PATH/dev-utils/docker > /dev/null
 
-  docker image build -t newtonsystems/$1:kube-dev \
-    --build-arg GO_MAIN=$3 \
-    --build-arg GO_PORT=$4 \
+  docker image build -t newtonsystems/$1:kube-dev${TIMESTAMP} \
+    --build-arg GO_MAIN=$1 \
+    --build-arg GO_PORT=$3 \
     --build-arg REPO_DIR=/go/src/github.com/newtonsystems/$1 \
     -f Dockerfile.dev .
 
@@ -436,7 +471,7 @@ hot-reload-deployment()
   popd > /dev/null
 
   kubectl replace --force -f $NEWTON_PATH/devops/k8s/deploy/local/$2
-	kubectl set image -f $NEWTON_PATH/devops/k8s/deploy/local/$2 $1=newtonsystems/$1:kube-dev
+	kubectl set image -f $NEWTON_PATH/devops/k8s/deploy/local/$2 $1=newtonsystems/$1:kube-dev${TIMESTAMP}
 
   update-tail-when-ready $1 &
 
@@ -446,9 +481,12 @@ hot-reload-deployment()
 
   echo -e "$INFO Watching for changes to ${BLUE}$PWD${NO_COLOUR} ... "
   fswatch $PWD | while read; do
-     echo -e "$INFO Detected a change, killing app to restart $3 on port $4"
-     kill-app $1
+    echo -e "$INFO Detected a change, building binary, killing app to restart app for $1 on port $3 ... "
+     echo -e "$INFO Compiling binary outside docker (faster) ..."
+     build-binary
+     kill-bin $1 $3
   done
+  echo -e "$INFO goodbye ..."
 }
 
 # swap-deployment-with-latest-release-image: Swap deployment with the latest release.
@@ -543,11 +581,14 @@ case "$1" in
   --shell-tele)
     shell-tele
   	;;
+  --compile-inside-docker)
+    compile-inside-docker $2
+  	;;
   --compile)
     compile
   	;;
   --hot-reload-deployment)
-    hot-reload-deployment ping ping-deployment.yml ./server.go 50000
+    hot-reload-deployment $2 $3 $4
   	;;
   --swap-deployment-with-latest-release-image)
     swap-deployment-with-latest-release-image $2 $3

@@ -13,33 +13,30 @@ WARN="$YELLOW[WARN]  `basename "$0"`:$NO_COLOUR"
 # Kill go
 # $1 main go
 # $2 port
-kill-go ()
+kill-bin ()
 {
-  process=$(ps aux |grep "go run .*$1" | grep -v grep )
+  process=$(ps aux |grep "./$1" | grep -v grep)
   pid_app=$(echo $process | awk '{print $1}')
   pid_port=$(echo $2 | awk '{print $1}')
 
-  echo -e "$INFO Process found: $process  pid ($pid_app)"
+  echo -e "$INFO Process found: $process  "
+  echo -e "$INFO pid: $pid_app  port: $pid_port"
   kill $pid_app || true
   lsof -ti:$pid_port || xargs kill
 }
 
-run-go () {
-  echo -e "$INFO Building and running go executable for $1 ..."
-  go build -i
-
-  go run -v $1
-}
-
+# $1 - binary
 # Run a go file forever
-reloader ()
+looper ()
 {
   # if [[ ! -f $1 ]]; then
   #     echo -e "$ERROR File '$1' not found in current working directory!"
   #     exit 1
   # fi
+
   while true; do
-    run-go $1
+    echo -e "$INFO Running executable: ./$1"
+    ./$1
     echo -e "$INFO Waiting 5 seconds before restarting $1"
     for i in `seq 1 5`; do
       echo -n "."
@@ -53,32 +50,10 @@ reloader ()
 
 # "main"
 case "$1" in
-	--hot-reload)
-		reloader $2
+	--hot-reload-bin)
+		looper $2
 		;;
-  --kill-go)
-  	kill-go $2 $3
+  --kill-bin)
+  	kill-bin $2 $3
   	;;
-  --update-install-deps)
-    update
-  	install
-  	;;
-  --hot-reload-deployment)
-    reload-deployment ping ping-deployment.yml server.go
-  	;;
-  --swap-deployment)
-    swap-deployment
-  	;;
-	--delete)
-		delete
-		;;
-	--clean)
-		clean
-		;;
-	--ui)
-		ui
-		;;
-	help|*)
-		usage
-		;;
 esac
