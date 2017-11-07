@@ -21,18 +21,18 @@ kill-bin ()
 
   echo -e "$INFO Process found: $process  "
   echo -e "$INFO pid: $pid_app  port: $pid_port"
-  kill $pid_app || true
-  lsof -ti:$pid_port || xargs kill
+  kill $pid_app  > /dev/null 2>&1 || true
+  lsof -ti:$pid_port  > /dev/null 2>&1 || xargs kill
 }
 
 # $1 - binary
 # Run a go file forever
 looper ()
 {
-  # if [[ ! -f $1 ]]; then
-  #     echo -e "$ERROR File '$1' not found in current working directory!"
-  #     exit 1
-  # fi
+  if [[ -z "$1" ]]; then
+       echo -e "$ERROR Please set repo name. "
+       exit 1
+  fi
 
   while true; do
     echo -e "$INFO Running executable: ./$1"

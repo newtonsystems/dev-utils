@@ -340,6 +340,7 @@ compile-inside-docker()
 # $2 - k8s deployment filename in $NEWTON_PATH/devops/k8s/deploy/local/ folder
 # $3 - docker image in the normal docker form <reponame>:<tag>
 swap-deployment() {
+  echo -e "$INFO Swapping deployment ${BLUE}$1${NO_COLOUR} with image ${BLUE}$3${NO_COLOUR}"
   kubectl replace -f $NEWTON_PATH/devops/k8s/deploy/local/$2
 	kubectl set image -f $NEWTON_PATH/devops/k8s/deploy/local/$2 $1=$3
 
@@ -411,7 +412,7 @@ check_started_probe() {
   done
 }
 
-kill-app ()
+kill-binary ()
 {
   running_pods=$(kubectl get pods -o go-template='{{range $items := .items}}{{if eq .status.phase "Running"}}{{range .spec.containers}}{{if eq .name "'$1'"}}{{$items.metadata.name}} {{end}}{{end}}{{end}}{{end}}')
   pod_count=$(echo $running_pods | wc -w | xargs)
@@ -479,13 +480,14 @@ hot-reload-deployment()
   check_started_probe $1 &
   check_health_probe $1 &
 
-  echo -e "$INFO Watching for changes to ${BLUE}$PWD${NO_COLOUR} ... "
-  fswatch $PWD | while read; do
-    echo -e "$INFO Detected a change, building binary, killing app to restart app for $1 on port $3 ... "
-     echo -e "$INFO Compiling binary outside docker (faster) ..."
-     build-binary
-     kill-bin $1 $3
+  fswatch -0 . -e ".*" -i ".*/[^.]*\\.go$" | while read -d "" event ; do
+    echo -e "$INFO Detected a change, building binary outside docker (faster), killing app to restart... "
+    echo -e "$INFO Detected change: ${BLUE}${event}${NO_COLOUR}"
+    build-binary
+    echo -e "$INFO Killing binary to restart application for ${BLUE}$1${NO_COLOUR} on port ${BLUE}$3${NO_COLOUR} ..."
+    kill-binary $1 $3
   done
+
   echo -e "$INFO goodbye ..."
 }
 
@@ -494,16 +496,23 @@ hot-reload-deployment()
 # $1 - service name  / repo name
 # $2 - k8s deployment filename in $NEWTON_PATH/devops/k8s/deploy/local/ folder
 swap-deployment-with-latest-release-image() {
+  REPO=$1
+  DEPLOYMENT_YML=$2
+  CURRENT_RELEASE_VERSION=$3
+
   echo -e "$INFO Running the most up-to-date image for branch ${CURRENT_BRANCH}"
-  image="newtonsystems/$1:$(CURRENT_RELEASE_VERSION)"
+  image="newtonsystems/$REPO:$CURRENT_RELEASE_VERSION"
   echo -e "$INFO Attempting to use image: $image"
 
-  echo -n "${BLUE}"
   eval `minikube docker-env`
   docker pull $image;
-  echo -n "${NO_COLOUR}"
 
-  swap-deployment-image $1 $2 $image
+  if [[ $? -ne 0 ]]; then
+    echo -e "$ERROR failed to pull $image"
+    exit 1
+  fi
+
+  swap-deployment $REPO $DEPLOYMENT_YML $image
 }
 
 # swap-deployment-with-latest-image: Swap deployment with the latest image based on the current branch.
@@ -511,6 +520,9 @@ swap-deployment-with-latest-release-image() {
 # $1 - service name  / repo name
 # $2 - k8s deployment filename in $NEWTON_PATH/devops/k8s/deploy/local/ folder
 swap-deployment-with-latest-image() {
+  REPO=$1
+  DEPLOYMENT_YML=$2
+
   echo -e "$INFO Running the most up-to-date image for branch ${CURRENT_BRANCH}"
   image="newtonsystems/$1:${CURRENT_BRANCH}"
   echo -e "$INFO Attempting to use image: $image"
@@ -518,10 +530,11 @@ swap-deployment-with-latest-image() {
   eval `minikube docker-env`
   docker pull $image
   if [[ $? -ne 0 ]] ; then
-    echo -e "$WARN Failed to find image in registry: $image"; \
-    read -r -p "${GREEN} Specific your own image name or Ctrl+C to exit:${NO_COLOUR}   " reply; \
+    echo -e "$ERROR Failed to find image in registry: $image";
+    echo -e -n "$GREEN Specific your own image name or Ctrl+C to exit:$NO_COLOUR"
+    read -r reply;
 
-    image="newtonsystems/$(REPO):$reply;"
+    image="newtonsystems/$REPO:$reply"
     docker pull $image;
 
     if [[ $? -ne 0 ]]; then
@@ -530,7 +543,7 @@ swap-deployment-with-latest-image() {
     fi
   fi
 
-  swap-deployment-image $1 $2 $image
+  swap-deployment $REPO $DEPLOYMENT_YML $image
 }
 
 # swap-deployment-with-custom-image: Swap deployment with the latest release.
@@ -539,11 +552,15 @@ swap-deployment-with-latest-image() {
 # $2 - k8s deployment filename in $NEWTON_PATH/devops/k8s/deploy/local/ folder
 # $3 - docker image in the normal docker form <reponame>:<tag>
 swap-deployment-with-custom-image() {
-  swap-deployment-image $1 $2 $3
+  REPO=$1
+  DEPLOYMENT_YML=$2
+  CUSTOM_IMAGE=$3
+
+  swap-deployment $REPO $DEPLOYMENT_YML $CUSTOM_IMAGE
 }
 
 # ------------------------------------------------------------------------------
-trap "trap - SIGTERM && kill -- -$$" SIGINT SIGTERM
+trap "trap - SIGTERM && kill -- $$" SIGINT SIGTERM EXIT
 #-------------------------------------------------------------------------------
 
 while getopts ":vu" opt; do
@@ -591,7 +608,7 @@ case "$1" in
     hot-reload-deployment $2 $3 $4
   	;;
   --swap-deployment-with-latest-release-image)
-    swap-deployment-with-latest-release-image $2 $3
+    swap-deployment-with-latest-release-image $2 $3 $4
   	;;
   --swap-deployment-with-latest-image)
     swap-deployment-with-latest-image $2 $3
