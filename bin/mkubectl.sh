@@ -12,7 +12,7 @@ if [ -z $NEWTON_PATH ]; then
     echo "For example:"
     echo "    export NEWTON_PATH=/Users/danvir/Masterbox/sideprojects/github/newtonsystems/"
     echo ""
-    exit
+    exit 1
 fi
 
 if [ -z $DEV_UTILS_PATH ]; then
@@ -21,7 +21,7 @@ if [ -z $DEV_UTILS_PATH ]; then
     echo "For example:"
     echo "    export DEV_UTILS_PATH=/Users/danvir/Masterbox/sideprojects/github/newtonsystems/dev-utils/"
     echo ""
-    exit
+    exit 1
 fi
 
 . $DEV_UTILS_PATH/common/bash-colours.sh
