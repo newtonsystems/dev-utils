@@ -72,10 +72,7 @@ circleci-build-push-to-dockerhub()
   install
 
   echo -e "$INFO Building go binary ..."
-  # Cannot use volumes in circleci so we cant use 'make build-build'
-  docker build -t $DOCKER_PROJECT_NAME:compile -f Dockerfile.build .
-  docker run --name compiler $DOCKER_PROJECT_NAME:compile
-  docker cp compiler:/go/src/github.com/newtonsystems/agent-mgmt/main $PWD
+  compile-inside-docker $DOCKER_PROJECT_NAME
 
   echo -e "$INFO Building docker image and then push to dockerhub ..."
   docker build -t newtonsystems/$DOCKER_PROJECT_NAME:$CIRCLE_BRANCH .
