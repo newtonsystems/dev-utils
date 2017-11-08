@@ -213,6 +213,7 @@ install()
 # FUTURE: With multiple we may want to tail multiple logs instead (Need some investigation)
 # $1 - REPO_NAME/SERVICE_NAME
 update-tail-when-ready() {
+  trap "trap - SIGTERM && kill -- $$" SIGINT SIGTERM EXIT
   if [[ -z $1 ]]; then
       echo -e "$ERROR Failed to set service/repo name. Will not tail log."
       echo -e "$INFO Attach logs: ${RED}off${NO_COLOUR}"
@@ -562,8 +563,6 @@ swap-deployment-with-custom-image() {
   swap-deployment $REPO $DEPLOYMENT_YML $CUSTOM_IMAGE
 }
 
-# ------------------------------------------------------------------------------
-trap "trap - SIGTERM && kill -- $$" SIGINT SIGTERM EXIT
 #-------------------------------------------------------------------------------
 
 while getopts ":vu" opt; do
