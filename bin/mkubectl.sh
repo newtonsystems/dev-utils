@@ -311,7 +311,7 @@ compile-inside-docker()
   fi
 
   echo -e "$INFO Temporarily copying Dockerfile.build to current dir ..."
-  cp $NEWTON_PATH/dev-utils/docker/Dockerfile.build .
+  cp $DEV_UTILS_PATH/docker/Dockerfile.build .
 
   echo -e  "$INFO Building a linux-alpine Go binary locally with a docker container ${BLUE}${REPO}:compile${RESET}"
   docker build -t ${REPO}:compile --build-arg REPO=$REPO -f Dockerfile.build .
