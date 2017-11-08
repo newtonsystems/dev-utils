@@ -49,22 +49,22 @@ circleci-build-push-to-dockerhub()
 {
   if [ -z $DOCKER_USER ]; then
       echo "You have not set the environment variable DOCKER_USER. Please set."
-      exit
+      exit 1
   fi
 
   if [ -z $DOCKER_PASS ]; then
       echo "You have not set the environment variable DOCKER_PASS. Please set."
-      exit
+      exit 1
   fi
 
   if [ -z $DOCKER_PROJECT_NAME ]; then
       echo "You have not set the environment variable DOCKER_PROJECT_NAME. Please set."
-      exit
+      exit 1
   fi
 
   if [ -z $CIRCLE_BRANCH ]; then
       echo "You have not set the environment variable CIRCLE_BRANCH. Please set."
-      exit
+      exit 1
   fi
 
   echo -e "$INFO Updating & installing dependencies ..."
@@ -76,6 +76,12 @@ circleci-build-push-to-dockerhub()
 
   echo -e "$INFO Building docker image and then push to dockerhub ..."
   docker build -t newtonsystems/$DOCKER_PROJECT_NAME:$CIRCLE_BRANCH .
+
+  if [[ $? -ne 0 ]] ; then
+    echo -e "$ERROR Failed to build docker image: newtonsystems/$DOCKER_PROJECT_NAME:$CIRCLE_BRANCH"
+    exit 1
+  fi
+
   docker login -u $DOCKER_USER -p $DOCKER_PASS
   docker push newtonsystems/$DOCKER_PROJECT_NAME:$CIRCLE_BRANCH
 
