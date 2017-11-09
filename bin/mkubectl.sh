@@ -279,8 +279,13 @@ update-tail-when-ready() {
 # Used inside docker container to build the executable for the correct platform
 build-binary()
 {
-  echo -e "$INFO Compiling binary ..."
-  env CGO_ENABLED=0 GOOS=linux GOARCH=amd64 go build -i -v
+  echo -e "$INFO Compiling binary ...  envs: (REPO=$REPO  GO_MAIN=$GO_MAIN)"
+  if [[  -z "$REPO" || -z "$GO_MAIN" ]]; then
+    echo -e "$INFO Missing REPO or GO_MAIN env vars therefore expecting main go file to be in the current working directory ... "
+    env CGO_ENABLED=0 GOOS=linux GOARCH=amd64 go build -i -v
+  else
+    env CGO_ENABLED=0 GOOS=linux GOARCH=amd64 go build -i -v -o $REPO $GO_MAIN
+  fi
 }
 
 #
@@ -310,26 +315,37 @@ compile()
 compile-inside-docker()
 {
   REPO=$1
+  GO_MAIN=$2  # optional
 
   if [ -z "$REPO" ]; then
     echo -e "$ERROR Please set the REPO. mkubectl.sh --compile-inside-docker <REPO>"
     exit 1
   fi
 
-  echo -e "$INFO Temporarily copying Dockerfile.build to current dir ..."
+  DOCKERENVOPTIONS="-e GO_MAIN=./app/cmd/addsvc/main.go"
+  if [ -z "${GO_MAIN}" ]; then
+    DOCKERENVOPTIONS=""
+  fi
+
+  echo -e "$INFO Temporarily copying Dockerfile.build and mkubectl.sh to current dir ..."
   cp $DEV_UTILS_PATH/docker/Dockerfile.build .
+  cp $DEV_UTILS_PATH/bin/mkubectl.sh .
 
   echo -e  "$INFO Building a linux-alpine Go binary locally with a docker container ${BLUE}${REPO}:compile${RESET}"
   docker build -t ${REPO}:compile --build-arg REPO=$REPO -f Dockerfile.build .
-	docker run --name compiler ${REPO}:compile
+  echo -e  "$INFO Running docker container ${BLUE}${REPO}:compile${RESET}"
+  set -x
+	docker run --name compiler ${DOCKERENVOPTIONS} ${REPO}:compile
+  set +x
   # Copy executable from docker container
   # NOTE: Cant use volumes in circleci
   docker cp compiler:/go/src/github.com/newtonsystems/${REPO}/${REPO} $PWD
   docker rm compiler
   docker rmi ${REPO}:compile
 
-  echo -e "$INFO Removing Dockerfile.build"
+  echo -e "$INFO Removing Dockerfile.build and mkubectl.sh"
   rm Dockerfile.build
+  rm mkubectl.sh
 }
 
 
@@ -562,6 +578,8 @@ swap-deployment-with-custom-image() {
   swap-deployment $REPO $DEPLOYMENT_YML $CUSTOM_IMAGE
 }
 
+# ------------------------------------------------------------------------------
+trap "trap - SIGTERM && kill -- $$ || true" SIGINT SIGTERM EXIT
 #-------------------------------------------------------------------------------
 
 while getopts ":vu" opt; do
@@ -591,7 +609,6 @@ case "$1" in
   	install
   	;;
   --tail-log)
-    trap "trap - SIGTERM && kill -- $$" SIGINT SIGTERM EXIT
     update-tail-when-ready $2
   	;;
   --shell)
@@ -601,25 +618,21 @@ case "$1" in
     shell-tele
   	;;
   --compile-inside-docker)
-    compile-inside-docker $2
+    compile-inside-docker $2 $3
   	;;
   --compile)
     compile
   	;;
   --hot-reload-deployment)
-    trap "trap - SIGTERM && kill -- $$" SIGINT SIGTERM EXIT
     hot-reload-deployment $2 $3 $4
   	;;
   --swap-deployment-with-latest-release-image)
-    trap "trap - SIGTERM && kill -- $$" SIGINT SIGTERM EXIT
     swap-deployment-with-latest-release-image $2 $3 $4
   	;;
   --swap-deployment-with-latest-image)
-    trap "trap - SIGTERM && kill -- $$" SIGINT SIGTERM EXIT
     swap-deployment-with-latest-image $2 $3
   	;;
   --swap-deployment-with-custom-image)
-    trap "trap - SIGTERM && kill -- $$" SIGINT SIGTERM EXIT
     swap-deployment-with-custom-image $2 $3 $4
   	;;
 	help|*)
