@@ -36,6 +36,7 @@ COPY . .
 
 RUN curl https://glide.sh/get | sh
 
-RUN chmod +x mkubectl.sh
+RUN git clone https://github.com/newtonsystems/dev-utils.git $DEV_UTILS_PATH
+RUN chmod +x $DEV_UTILS_PATH/bin/mkubectl.sh
 
-ENTRYPOINT ["./mkubectl.sh", "--compile"]
+ENTRYPOINT ["/dev-utils/bin/mkubectl.sh", "--compile"]

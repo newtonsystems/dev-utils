@@ -15,14 +15,7 @@ if [ -z $NEWTON_PATH ]; then
     exit 1
 fi
 
-if [ -z $DEV_UTILS_PATH ]; then
-    echo "You have not set the environment variable DEV_UTILS_PATH. Please set."
-    echo ""
-    echo "For example:"
-    echo "    export DEV_UTILS_PATH=/Users/danvir/Masterbox/sideprojects/github/newtonsystems/dev-utils/"
-    echo ""
-    exit 1
-fi
+DEV_UTILS_PATH=$NEWTON_PATH/dev-utils
 
 . $DEV_UTILS_PATH/common/bash-colours.sh
 
@@ -146,6 +139,20 @@ shell ()
 
 # --- Utils Functions for Dependencies ---
 
+# get-deps-env: Gets glide dependency
+get-deps-env ()
+{
+  if [[ ! -f $1.lock || ! -f $1.yaml ]]; then
+      echo -e "$ERROR File '$1.lock' or '$1.yaml' not found in current working directory!"
+      return
+  fi
+  glide cache-clear
+	echo -e "$INFO Updating dependencies for $1 environment"
+	cp $1.lock glide.lock
+	glide -y $1.yaml get --force $2
+	cp glide.lock $1.lock
+}
+
 # update-deps-env: Updates glide dependencies
 update-deps-env ()
 {
@@ -153,7 +160,7 @@ update-deps-env ()
       echo -e "$ERROR File '$1.lock' or '$1.yaml' not found in current working directory!"
       return
   fi
-  rm -rf ./.glide
+  glide cache-clear
 	echo -e "$INFO Updating dependencies for $1 environment"
 	cp $1.lock glide.lock
 	glide -y $1.yaml update --force
@@ -200,6 +207,22 @@ install()
       install-deps-env "$CURRENT_BRANCH"
   fi
 }
+
+# get: Get a dependency based off the branch of the repo (Add a package)
+get()
+{
+  GO_PACKAGE=$1
+
+  echo -e "$INFO Getting go packages via glide ..."
+  if [[ "$CURRENT_BRANCH" != "master" && "$CURRENT_BRANCH" != "featuretest" ]]; then
+    echo -e "$INFO using branch ${BLUE}master${NO_COLOUR} ... "
+    get-deps-env "master" $GO_PACKAGE
+  else
+    echo -e "$INFO using branch ${BLUE}$CURRENT_BRANCH${NO_COLOUR} ... "
+    get-deps-env "$CURRENT_BRANCH" $GO_PACKAGE
+  fi
+}
+
 
 # ------------------------------------------------------------------------------
 # Logging commands
@@ -312,6 +335,8 @@ compile()
 #
 # Compiles go binary for alpine
 #
+# $1 - Repository name
+# $2 - Main .go file (optional - assumed to be in the current dir if not included)
 compile-inside-docker()
 {
   REPO=$1
@@ -322,30 +347,31 @@ compile-inside-docker()
     exit 1
   fi
 
-  DOCKERENVOPTIONS="-e GO_MAIN=./app/cmd/addsvc/main.go"
+  DOCKERENVOPTIONS="-e GO_MAIN=${GO_MAIN}"
   if [ -z "${GO_MAIN}" ]; then
     DOCKERENVOPTIONS=""
   fi
 
-  echo -e "$INFO Temporarily copying Dockerfile.build and mkubectl.sh to current dir ..."
+  echo -e "$INFO Temporarily copying Dockerfile.build to current dir ..."
   cp $DEV_UTILS_PATH/docker/Dockerfile.build .
-  cp $DEV_UTILS_PATH/bin/mkubectl.sh .
 
   echo -e  "$INFO Building a linux-alpine Go binary locally with a docker container ${BLUE}${REPO}:compile${RESET}"
   docker build -t ${REPO}:compile --build-arg REPO=$REPO -f Dockerfile.build .
+
   echo -e  "$INFO Running docker container ${BLUE}${REPO}:compile${RESET}"
   set -x
-	docker run --name compiler ${DOCKERENVOPTIONS} ${REPO}:compile
+	docker run --name compiler ${DOCKERENVOPTIONS} -v /home/ubuntu/go/src/github.com/newtonsystems/dev-utils:/dev-utils ${REPO}:compile
   set +x
+
   # Copy executable from docker container
   # NOTE: Cant use volumes in circleci
   docker cp compiler:/go/src/github.com/newtonsystems/${REPO}/${REPO} $PWD
+
   docker rm compiler
   docker rmi ${REPO}:compile
 
-  echo -e "$INFO Removing Dockerfile.build and mkubectl.sh"
+  echo -e "$INFO Removing Dockerfile.build"
   rm Dockerfile.build
-  rm mkubectl.sh
 }
 
 
@@ -597,6 +623,9 @@ case "$1" in
 		;;
   --circleci-go-run-tests)
 		circleci-go-run-tests
+		;;
+  --get-deps)
+		get $2
 		;;
 	--update-deps)
 		update
