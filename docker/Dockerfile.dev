@@ -7,13 +7,14 @@ FROM golang:1.9.2-alpine3.6
 LABEL maintainer "james.tarball@newtonsystems.co.uk"
 
 # Build Arguments:
-# GO_MAIN  - Set the go file to run
-# GO_PORT  - The port the go server uses (to make sure it is removed)
+# REPO_EXECUTABLE  - Set the executable file to run
 # REPO_DIR - The go directory of the repo should be in GOPATH i.e. /go/src/github.com/newtonsystems/<repo>
 
+ARG REPO_EXECUTABLE
 ARG REPO_DIR
-ARG GO_MAIN
-ARG GO_PORT
+
+ENV REPO_EXECUTABLE $REPO_EXECUTABLE
+
 
 WORKDIR $REPO_DIR
 
@@ -43,4 +44,4 @@ RUN chmod +x /usr/bin/run.sh
 
 RUN echo $PWD
 
-ENTRYPOINT ["/usr/bin/run.sh", "--hot-reload-bin", "ping"]
+ENTRYPOINT ["/usr/bin/run.sh", "--hot-reload-bin"]

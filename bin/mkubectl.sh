@@ -139,53 +139,87 @@ shell ()
 
 # --- Utils Functions for Dependencies ---
 
-# get-deps-env: Gets glide dependency
+# get-deps-env: Adds a dep dependency
 get-deps-env ()
 {
-  if [[ ! -f $1.lock || ! -f $1.yaml ]]; then
-      echo -e "$ERROR File '$1.lock' or '$1.yaml' not found in current working directory!"
-      return
+  if [[ ! -f $1.lock || ! -f $1.toml ]]; then
+      echo -e "$ERROR File '$1.lock' or '$1.toml' not found in current working directory!"
+      exit 1
   fi
-  glide cache-clear
-	echo -e "$INFO Updating dependencies for $1 environment"
-	cp $1.lock glide.lock
-	glide -y $1.yaml get --force $2
-	cp glide.lock $1.lock
+
+  if [[ -z "$2" ]]; then
+      echo -e "$ERROR must specify at least one project or package to add a dependency"
+      exit 2
+  fi
+
+	echo -e "$INFO Adding dependency for ${BLUE}$1${NO_COLOUR} environment "
+	cp $1.lock Gopkg.lock
+  cp $1.toml Gopkg.toml
+	dep ensure -add $2
+
+  if [ $? -ne 0 ]; then
+    echo -e "$ERROR Adding dependency ${RED}FAIL${NO_COLOUR}"
+    exit 1
+  fi
+
+  echo -e "$INFO Adding dependency ${GREEN}OK${NO_COLOUR}"
+  echo -e "$INFO Copying changes back to ${GREEN}$1.lock${NO_COLOUR}"
+	cp Gopkg.lock $1.lock
 }
 
-# update-deps-env: Updates glide dependencies
+# update-deps-env: Updates dep dependencies
 update-deps-env ()
 {
-  if [[ ! -f $1.lock || ! -f $1.yaml ]]; then
-      echo -e "$ERROR File '$1.lock' or '$1.yaml' not found in current working directory!"
-      return
+  if [[ ! -f $1.lock || ! -f $1.toml ]]; then
+      echo -e "$ERROR File '$1.lock' or '$1.toml' not found in current working directory!"
+      exit 1
   fi
-  glide cache-clear
-	echo -e "$INFO Updating dependencies for $1 environment"
-	cp $1.lock glide.lock
-	glide -y $1.yaml update --force
-	cp glide.lock $1.lock
+	echo -ne "$INFO Updating dependencies for ${BLUE}$1${NO_COLOUR} environment "
+	cp $1.lock Gopkg.lock
+  cp $1.toml Gopkg.toml
+	dep ensure -update
+
+  if [ $? -ne 0 ]; then
+    echo -e "${RED}FAIL${NO_COLOUR}"
+    echo -e "$ERROR Dependencies update failed"
+    exit 1
+  fi
+
+  echo -e "${GREEN}OK${NO_COLOUR}"
+  echo -e "$INFO Copying changes back to ${GREEN}$1.lock${NO_COLOUR}"
+	cp Gopkg.lock $1.lock
 }
 
 # install-deps-env: Install glide dependencies
 install-deps-env ()
 {
-  if [[ ! -f $1.lock || ! -f $1.yaml ]]; then
-      echo -e "$ERROR File '$1.lock' or '$1.yaml' not found in current working directory!"
-      return
+  if [[ ! -f $1.lock || ! -f $1.toml ]]; then
+      echo -e "$ERROR File '$1.lock' or '$1.toml' not found in current working directory!"
+      exit 1
   fi
-	echo -e "$INFO Installing dependencies for $1 environment"
-  cp $1.lock glide.lock
-	glide -y $1.yaml install
-	cp glide.lock $1.lock
+	echo -ne "$INFO Installing dependencies for ${BLUE}$1${NO_COLOUR} environment "
+	cp $1.lock Gopkg.lock
+  cp $1.toml Gopkg.toml
+	dep ensure
+
+  if [ $? -ne 0 ]; then
+    echo -e "${RED}FAIL${NO_COLOUR}"
+    echo -e "$ERROR Dependencies install failed"
+    exit 1
+  fi
+
+  echo -e "${GREEN}OK${NO_COLOUR}"
+  echo -e "$INFO Copying changes back to ${GREEN}$1.lock${NO_COLOUR}"
+	cp Gopkg.lock $1.lock
 }
+
 
 # --- End of utils functions ---
 
 # update: Updates dependencies based off the branch of the repo
 update()
 {
-  echo -e "$INFO Updating go packages via glide ..."
+  echo -e "$INFO Updating go packages via dep ..."
   if [[ "$CURRENT_BRANCH" != "master" && "$CURRENT_BRANCH" != "featuretest" ]]; then
     echo -e "$INFO using branch ${BLUE}master${NO_COLOUR} ... "
     update-deps-env "master"
@@ -198,7 +232,7 @@ update()
 # install: Installs dependencies based off the branch of the repo
 install()
 {
-  echo -e "$INFO Installing go packages via glide ..."
+  echo -e "$INFO Installing go packages via dep ..."
   if [[ "$CURRENT_BRANCH" != "master" && "$CURRENT_BRANCH" != "featuretest" ]]; then
     echo -e "$INFO using branch ${BLUE}master${NO_COLOUR} ... "
     install-deps-env "master"
@@ -213,7 +247,7 @@ get()
 {
   GO_PACKAGE=$1
 
-  echo -e "$INFO Getting go packages via glide ..."
+  echo -e "$INFO Getting go packages via dep ..."
   if [[ "$CURRENT_BRANCH" != "master" && "$CURRENT_BRANCH" != "featuretest" ]]; then
     echo -e "$INFO using branch ${BLUE}master${NO_COLOUR} ... "
     get-deps-env "master" $GO_PACKAGE
@@ -304,11 +338,26 @@ build-binary()
 {
   echo -e "$INFO Compiling binary ...  envs: (REPO=$REPO  GO_MAIN=$GO_MAIN)"
   if [[  -z "$REPO" || -z "$GO_MAIN" ]]; then
-    echo -e "$INFO Missing REPO or GO_MAIN env vars therefore expecting main go file to be in the current working directory ... "
+    echo -e "$WARN Missing REPO or GO_MAIN env vars therefore expecting main go file to be in the current working directory ... "
     env CGO_ENABLED=0 GOOS=linux GOARCH=amd64 go build -i -v
+
+    if [[ $? -ne 0 ]]; then
+      echo -e "$ERROR Go build failed"
+      echo -e "$INFO Compile executable: ${RED}FAIL${NO_COLOUR}"
+      exit 1
+    fi
+
   else
     env CGO_ENABLED=0 GOOS=linux GOARCH=amd64 go build -i -v -o $REPO $GO_MAIN
+
+    if [[ $? -ne 0 ]]; then
+      echo -e "$ERROR Go build failed"
+      echo -e "$INFO Compile executable: ${RED}FAIL${NO_COLOUR}"
+      exit 1
+    fi
   fi
+
+  echo -e "$INFO Compile executable: ${GREEN}OK${NO_COLOUR}"
 }
 
 #
@@ -327,7 +376,6 @@ build-binary()
 # $1 - The .go file to compile to an executable
 compile()
 {
-  update
   install
   build-binary
 }
@@ -358,9 +406,15 @@ compile-inside-docker()
   echo -e  "$INFO Building a linux-alpine Go binary locally with a docker container ${BLUE}${REPO}:compile${RESET}"
   docker build -t ${REPO}:compile --build-arg REPO=$REPO -f Dockerfile.build .
 
+  if [ $? -ne 0 ]; then
+    echo -e "$ERROR Docker build failed ... "
+    echo -e "$ERROR Failed to compile binary ${REPO}"
+    exit 1
+  fi
+
   echo -e  "$INFO Running docker container ${BLUE}${REPO}:compile${RESET}"
   set -x
-	docker run --name compiler ${DOCKERENVOPTIONS} -v /home/ubuntu/go/src/github.com/newtonsystems/dev-utils:/dev-utils ${REPO}:compile
+	docker run --name compiler ${DOCKERENVOPTIONS} -v ${DEV_UTILS_PATH}:/dev-utils ${REPO}:compile
   set +x
 
   # Copy executable from docker container
@@ -482,12 +536,12 @@ hot-reload-deployment()
   check-setup.sh
   if [ $? -ne 0 ]; then
     echo -e "$ERROR Minikube/Docker not setup up correctly ... "
-    return
+    exit 1
   fi
 
   if [[ ! -f $NEWTON_PATH/devops/k8s/deploy/local/$2 ]]; then
-      echo -e "$ERROR File '$1' not found in current working directory!"
-      return
+    echo -e "$ERROR File '$1' not found in current working directory!"
+    exit 1
   fi
 
 
@@ -504,8 +558,7 @@ hot-reload-deployment()
   pushd $NEWTON_PATH/dev-utils/docker > /dev/null
 
   docker image build -t newtonsystems/$1:kube-dev${TIMESTAMP} \
-    --build-arg GO_MAIN=$1 \
-    --build-arg GO_PORT=$3 \
+    --build-arg REPO_EXECUTABLE=$1 \
     --build-arg REPO_DIR=/go/src/github.com/newtonsystems/$1 \
     -f Dockerfile.dev .
 
@@ -605,7 +658,7 @@ swap-deployment-with-custom-image() {
 }
 
 # ------------------------------------------------------------------------------
-trap "trap - SIGTERM && kill -- $$ || true" SIGINT SIGTERM EXIT
+#trap "trap - SIGTERM && kill -- $$ && echo $$" SIGINT SIGTERM EXIT
 #-------------------------------------------------------------------------------
 
 while getopts ":vu" opt; do
@@ -639,6 +692,7 @@ case "$1" in
   	;;
   --tail-log)
     update-tail-when-ready $2
+    ps aux | grep mkubectl.sh | grep -v grep | awk '{print $2}'| xargs kill
   	;;
   --shell)
     shell $2
@@ -654,15 +708,19 @@ case "$1" in
   	;;
   --hot-reload-deployment)
     hot-reload-deployment $2 $3 $4
+    ps aux | grep "mkubectl.sh --hot-reload-deployment $2" | grep -v grep | awk '{print $2}'| xargs kill
   	;;
   --swap-deployment-with-latest-release-image)
     swap-deployment-with-latest-release-image $2 $3 $4
+    ps aux | grep "mkubectl.sh --hot-reload-deployment $2" | grep -v grep | awk '{print $2}'| xargs kill
   	;;
   --swap-deployment-with-latest-image)
     swap-deployment-with-latest-image $2 $3
+    ps aux | grep "mkubectl.sh --hot-reload-deployment $2" | grep -v grep | awk '{print $2}'| xargs kill
   	;;
   --swap-deployment-with-custom-image)
     swap-deployment-with-custom-image $2 $3 $4
+    ps aux | grep "mkubectl.sh --hot-reload-deployment $2" | grep -v grep | awk '{print $2}'| xargs kill
   	;;
 	help|*)
 		usage

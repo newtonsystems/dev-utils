@@ -29,14 +29,14 @@ kill-bin ()
 # Run a go file forever
 looper ()
 {
-  if [[ -z "$1" ]]; then
-       echo -e "$ERROR Please set repo name. "
+  if [[ -z "$REPO_EXECUTABLE" ]]; then
+       echo -e "$ERROR Please set repo executable. "
        exit 1
   fi
 
   while true; do
     echo -e "$INFO Running executable: ./$1"
-    ./$1
+    ./$REPO_EXECUTABLE
     echo -e "$INFO Waiting 5 seconds before restarting $1"
     for i in `seq 1 5`; do
       echo -n "."
@@ -51,7 +51,7 @@ looper ()
 # "main"
 case "$1" in
 	--hot-reload-bin)
-		looper $2
+		looper
 		;;
   --kill-bin)
   	kill-bin $2 $3

@@ -62,6 +62,7 @@ clean ()
     do
       if [[ "$namespace" == "kube-system" || "$namespace" == "kube-public" ]];  then
         echo -e "$INFO Skipping deletion of namespace: $BLUE $namespace $NO_COLOUR"
+        continue
       fi
       echo -e "$INFO Deleting components for namespace: $BLUE $namespace $NO_COLOUR"
   		kubectl delete deployment --all --namespace=$namespace
