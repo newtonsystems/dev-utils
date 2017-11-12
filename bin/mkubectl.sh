@@ -399,10 +399,15 @@ compile-inside-docker()
     DOCKERENVOPTIONS=""
   fi
 
+  # NOTE: Volumes can't be used in circleci that is already using a custom docker image
+  DOCKERVOLOPTIONS=""
+  #DOCKERVOLOPTIONS="-v ${DEV_UTILS_PATH}:/dev-utils"
+
   echo -e "$INFO Temporarily copying Dockerfile.build to current dir ..."
   cp $DEV_UTILS_PATH/docker/Dockerfile.build .
 
   echo -e  "$INFO Building a linux-alpine Go binary locally with a docker container ${BLUE}${REPO}:compile${RESET}"
+
   docker build -t ${REPO}:compile --build-arg REPO=$REPO -f Dockerfile.build .
 
   if [ $? -ne 0 ]; then
@@ -413,7 +418,7 @@ compile-inside-docker()
 
   echo -e  "$INFO Running docker container ${BLUE}${REPO}:compile${RESET}"
   set -x
-	docker run --name compiler ${DOCKERENVOPTIONS} -v ${DEV_UTILS_PATH}:/dev-utils ${REPO}:compile
+	docker run --name compiler ${DOCKERENVOPTIONS} ${DOCKERVOLOPTIONS} ${REPO}:compile
   set +x
 
   # Copy executable from docker container
@@ -660,7 +665,7 @@ swap-deployment-with-custom-image() {
 #trap "trap - SIGTERM && kill -- $$ && echo $$" SIGINT SIGTERM EXIT
 #-------------------------------------------------------------------------------
 
-while getopts ":vu" opt; do
+while getopts ":vul" opt; do
   case $opt in
     #h) usage; exit;;
     v) VERBOSE=1;;
