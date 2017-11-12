@@ -65,7 +65,7 @@ circleci-build-push-to-dockerhub()
   install
 
   echo -e "$INFO Building go binary ..."
-  compile-inside-docker $DOCKER_PROJECT_NAME
+  compile-inside-docker $DOCKER_PROJECT_NAME $GO_MAIN
 
   echo -e "$INFO Building docker image and then push to dockerhub ..."
   docker build -t newtonsystems/$DOCKER_PROJECT_NAME:$CIRCLE_BRANCH .
