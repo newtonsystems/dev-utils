@@ -106,8 +106,7 @@ circleci-go-run-tests()
       exit 1
   fi
 
-  echo -e "Updating and installing dependencies"
-  update
+  echo -e "$INFO Installing dependencies ..."
   install
 
   mkdir -p $TEST_REPORTS
