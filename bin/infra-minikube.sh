@@ -41,7 +41,7 @@ create ()
 		exit 1
 	fi
 	echo -e "$INFO Creating all services locally inside minikube ..."
-	kubectl apply -f $NEWTON_PATH/devops/k8s/deploy/local/
+	$NEWTON_PATH/devops/k8s/deploy/bin/create-local.sh
 }
 
 
@@ -84,7 +84,7 @@ clean ()
 delete ()
 {
 	echo -e "$INFO Deleting all services locally inside minikube ..."
-	kubectl delete -f $NEWTON_PATH/devops/k8s/deploy/local/
+	$NEWTON_PATH/devops/k8s/deploy/bin/delete-local.sh
 }
 
 

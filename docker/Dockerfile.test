@@ -1,0 +1,38 @@
+#
+# Main Dockerfile
+#
+# Should create small images < 30MB :)
+#
+FROM golang:1.9.2-alpine3.6
+LABEL maintainer "james.tarball@newtonsystems.co.uk"
+
+ARG REPO
+
+ENV REPO $REPO
+ENV NEWTON_PATH /
+ENV DEV_UTILS_PATH /dev-utils
+ENV TEST_REPORTS /tmp/test-reports
+
+WORKDIR /go/src/github.com/newtonsystems/$REPO
+
+RUN apk add --update --virtual .build-deps \
+        bash \
+        curl \
+        make \
+        git \
+        autoconf \
+        automake \
+    && rm -rf /var/cache/apk/*
+
+ENV GOPATH /go
+ENV PATH $GOPATH/bin:$PATH
+
+RUN go get -u github.com/jstemmer/go-junit-report
+
+RUN git clone https://github.com/newtonsystems/dev-utils.git $DEV_UTILS_PATH
+
+COPY _build/dev-utils $DEV_UTILS_PATH
+
+RUN chmod +x $DEV_UTILS_PATH/bin/mkubectl.sh
+
+ENTRYPOINT ["/dev-utils/bin/mkubectl.sh", "--run-tests-dev"]

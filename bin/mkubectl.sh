@@ -37,6 +37,69 @@ usage ()
 # ------------------------------------------------------------------------------
 # Useful CircleCI commands
 
+# --- Utils for tests ---
+# print-test-results
+# $1 - test results file (should be xml and junit format)
+print-test-results()
+{
+  testsuites=$(cat $1 | grep "<testsuite "| awk '{print $0,"\n"}')
+
+  cumulative_failures=$(cat .testfailures)
+  cumulative_successes=$(cat .testsuccesses)
+
+  IFS=$'\n'
+  total_successes=0
+  total_failures=0
+  for testsuite in $testsuites; do
+      successes=$(echo $testsuite | tr -s " " | cut -d "=" -f2 | sed 's/\"//g' | cut -d " " -f1 | xargs)
+      failures=$(echo $testsuite | tr -s " " | cut -d "=" -f3 | sed 's/\"//g' | cut -d " " -f1 | xargs)
+      testtime=$(echo $testsuite | tr -s " " | cut -d "=" -f4 | sed 's/\"//g' | cut -d " " -f1 | xargs)
+      testname=$(echo $testsuite | tr -s " " | cut -d "=" -f5 | sed 's/\"//g' | cut -d " " -f1 | xargs)
+
+      total_successes=$((total_successes + successes))
+      total_failures=$((total_failures + failures))
+
+      echo -e "$INFO $testname time: ${BLUE}${testtime}${NO_COLOUR} successes: ${BLUE}${successes}${NO_COLOUR} failures: ${BLUE}${failures}${NO_COLOUR}"
+  done
+
+  new_cumulative_successes=$((cumulative_successes + total_successes))
+  new_cumulative_failures=$((cumulative_failures + total_failures))
+
+  echo $new_cumulative_successes > .testsuccesses
+  echo $new_cumulative_failures > .testfailures
+
+  echo -e "$INFO (Cumulative successes: ${BLUE}$new_cumulative_successes${NO_COLOUR} Cumulative failures: ${BLUE}$new_cumulative_failures${NO_COLOUR})"
+}
+
+run-tests()
+{
+  if [[ $(grep 'check:' Makefile | wc -l) -eq 0 ]]; then
+      echo -e "$ERROR It looks like you haven't got a 'check' target in your Makefile."
+      echo -e "The 'check' target should run go tests for your current repo."
+      exit 1
+  fi
+
+  if [ -z $TEST_REPORTS ]; then
+      echo "You have not set the environment variable TEST_REPORTS. Please set."
+      exit 1
+  fi
+
+  mkdir -p $TEST_REPORTS
+  #set -ou pipefail
+  trap "go-junit-report < ${TEST_REPORTS}/go-test.out > ${TEST_REPORTS}/go-test-report.xml" RETURN
+  # Notice this `set -o pipefail`, this will cause script to fail if `make test` fails
+  # without this option script will return success regardless of testing result due to pipe after test command
+  make check | tee ${TEST_REPORTS}/go-test.out
+}
+
+run-tests-dev()
+{
+  run-tests
+  print-test-results ${TEST_REPORTS}/go-test-report.xml
+}
+
+# --- End of utils for tests ---
+
 # circleci-build-push-to-dockerhub: Builds and pushs docker image for go application
 circleci-build-push-to-dockerhub()
 {
@@ -106,15 +169,9 @@ circleci-go-run-tests()
       exit 1
   fi
 
-  echo -e "$INFO Installing dependencies ..."
+  echo -e "$INFO Installing dependencies and then running tests ..."
   install
-
-  mkdir -p $TEST_REPORTS
-  set -ou pipefail
-  trap "go-junit-report <${TEST_REPORTS}/go-test.out > ${TEST_REPORTS}/go-test-report.xml" EXIT
-  # Notice this `set -o pipefail`, this will cause script to fail if `make test` fails
-  # without this option script will return success regardless of testing result due to pipe after test command
-  make check | tee ${TEST_REPORTS}/go-test.out
+  run-tests
 }
 
 # ------------------------------------------------------------------------------
@@ -122,7 +179,7 @@ circleci-go-run-tests()
 
 # shell-debug: Run shell through telepresence (to debug and print some useful help)
 shell-tele() {
-  telepresence --port $1
+  telepresence #--port $1
 }
 
 # shell: Run shell through kubectl
@@ -445,10 +502,15 @@ compile-inside-docker()
 # $1 - service name / repo name
 # $2 - k8s deployment filename in $NEWTON_PATH/devops/k8s/deploy/local/ folder
 # $3 - docker image in the normal docker form <reponame>:<tag>
-swap-deployment() {
+swap-deployment-only() {
   echo -e "$INFO Swapping deployment ${BLUE}$1${NO_COLOUR} with image ${BLUE}$3${NO_COLOUR}"
   kubectl replace -f $NEWTON_PATH/devops/k8s/deploy/local/$2
 	kubectl set image -f $NEWTON_PATH/devops/k8s/deploy/local/$2 $1=$3
+
+}
+
+swap-deployment() {
+  swap-deployment-only $1 $2 $3
 
   update-tail-when-ready $1
 }
@@ -531,7 +593,62 @@ kill-binary ()
   fi
 }
 
+# swap-deployment-with-custom-image: Swap deployment with the latest release.
+# Useful for debugging an issue
+# $1 - service name  / repo name
+# $2 - k8s deployment filename in $NEWTON_PATH/devops/k8s/deploy/local/ folder
+swap-deployment-with-master() {
+  REPO=$1
+  DEPLOYMENT_YML=$2
+
+  echo -e "$INFO Swapping image on ${REPO} with ${REPO}:master"
+
+  swap-deployment-only $REPO $DEPLOYMENT_YML newtonsystems/$REPO:master
+
+  rm Dockerfile.test
+}
+
 # --- End of utils functions ---
+
+# hot-reload-deployment: Replace image with local repo (hot-reloaded) for fast development
+# $1 - REPO
+# $2 - LOCAL_DEPLOYMENT_FILENAME
+# $3 - watch dir/files
+# EXPECT HEALTHZ PROBE ON DEPLOYMENT
+hot-reload-test()
+{
+  check-setup.sh
+  if [ $? -ne 0 ]; then
+    echo -e "$ERROR Minikube/Docker not setup up correctly ... "
+    exit 1
+  fi
+
+  if [[ ! -f $NEWTON_PATH/devops/k8s/deploy/local/$2 ]]; then
+    echo -e "$ERROR File '$NEWTON_PATH/devops/k8s/deploy/local/$2' not found"
+    exit 1
+  fi
+
+  REPO=$1
+  DEPLOYMENT_YML=$2
+
+  eval `minikube docker-env`
+  echo -e "$INFO Building ${REPO}:test${TIMESTAMP} image for continous testing ..."
+  cp $DEV_UTILS_PATH/docker/Dockerfile.test .
+  mkdir -p _build
+  cp -r $DEV_UTILS_PATH _build/dev-utils
+
+  docker build -t ${REPO}:test${TIMESTAMP} --build-arg REPO=$REPO -f Dockerfile.test .
+
+  if [[ $? -ne 0 ]] ; then
+    echo -e "$ERROR Failed to build docker image."
+    exit 1
+  fi
+
+  trap "swap-deployment-with-master $REPO $DEPLOYMENT_YML"  EXIT
+  swap-deployment $REPO $DEPLOYMENT_YML ${REPO}:test${TIMESTAMP}
+
+  echo -e "$INFO goodbye ..."
+}
 
 # hot-reload-deployment: Replace image with local repo (hot-reloaded) for fast development
 # $1 - REPO
@@ -713,21 +830,28 @@ case "$1" in
   --compile)
     compile
   	;;
+  --run-tests-dev)
+    run-tests-dev
+  	;;
   --hot-reload-deployment)
     hot-reload-deployment $2 $3 $4
     ps aux | grep "mkubectl.sh --hot-reload-deployment $2" | grep -v grep | awk '{print $2}'| xargs kill
   	;;
+  --hot-reload-test)
+    hot-reload-test $2 $3
+    ps aux | grep "mkubectl.sh --hot-reload-test $2" | grep -v grep | awk '{print $2}'| xargs kill
+  	;;
   --swap-deployment-with-latest-release-image)
     swap-deployment-with-latest-release-image $2 $3 $4
-    ps aux | grep "mkubectl.sh --hot-reload-deployment $2" | grep -v grep | awk '{print $2}'| xargs kill
+    ps aux | grep "mkubectl.sh --swap-deployment-with-latest-release-image $2" | grep -v grep | awk '{print $2}'| xargs kill
   	;;
   --swap-deployment-with-latest-image)
     swap-deployment-with-latest-image $2 $3
-    ps aux | grep "mkubectl.sh --hot-reload-deployment $2" | grep -v grep | awk '{print $2}'| xargs kill
+    ps aux | grep "mkubectl.sh --swap-deployment-with-latest-image $2" | grep -v grep | awk '{print $2}'| xargs kill
   	;;
   --swap-deployment-with-custom-image)
     swap-deployment-with-custom-image $2 $3 $4
-    ps aux | grep "mkubectl.sh --hot-reload-deployment $2" | grep -v grep | awk '{print $2}'| xargs kill
+    ps aux | grep "mkubectl.sh --swap-deployment-with-custom-image $2" | grep -v grep | awk '{print $2}'| xargs kill
   	;;
 	help|*)
 		usage
