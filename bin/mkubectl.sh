@@ -85,7 +85,7 @@ run-tests()
   fi
 
   mkdir -p $TEST_REPORTS
-  #set -ou pipefail
+  set -ou pipefail
   trap "go-junit-report < ${TEST_REPORTS}/go-test.out > ${TEST_REPORTS}/go-test-report.xml" RETURN
   # Notice this `set -o pipefail`, this will cause script to fail if `make test` fails
   # without this option script will return success regardless of testing result due to pipe after test command
